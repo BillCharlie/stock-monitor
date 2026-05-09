@@ -44,8 +44,6 @@ jobs:
           # Set VITE_API_BASE_URL in repo Settings → Secrets → Actions
           # Example: https://your-tunnel.trycloudflare.com
           VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
-          # Same value as API_SECRET in backend .env — keeps write endpoints private
-          VITE_API_SECRET: ${{ secrets.VITE_API_SECRET }}
           VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH || '/stock-monitor/' }}
         run: npm run build
 

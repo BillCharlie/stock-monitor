@@ -3,29 +3,46 @@ import MarketOverview from './components/MarketOverview.jsx'
 import WatchlistPanel from './components/WatchlistPanel.jsx'
 import StockChart from './components/StockChart.jsx'
 import AnalysisPanel from './components/AnalysisPanel.jsx'
-import { api } from './api/stocks.js'
+import AccessKeyPanel from './components/AccessKeyPanel.jsx'
+import { api, keys } from './api/stocks.js'
 
 export default function App() {
   const [selected, setSelected] = useState({ symbol: '2330.TW', name: '台積電' })
   const [interval, setInterval] = useState('1d')
-  const [activeTab, setActiveTab] = useState('chart') // 'chart' | 'analysis' | 'report'
+  const [activeTab, setActiveTab] = useState('chart')
   const [generating, setGenerating] = useState(false)
   const [reportMsg, setReportMsg] = useState('')
-
   const [hasPdf, setHasPdf] = useState(false)
+  const [showKeys, setShowKeys] = useState(false)
+
+  // Show key indicator: lock icon is green if both keys are set, yellow if partial, gray if none
+  const hasReportKey = !!keys.getReport()
+  const hasStockKey  = !!keys.getStock()
+  const keyStatus = hasReportKey && hasStockKey ? 'both'
+    : hasReportKey || hasStockKey ? 'partial' : 'none'
 
   const handleGenerate = async () => {
+    if (!keys.getReport()) {
+      setShowKeys(true)
+      setReportMsg('請先設定報告生成密鑰')
+      return
+    }
     setGenerating(true)
     setReportMsg('分析中，請稍候（約1-2分鐘）...')
     try {
       const res = await api.triggerGptReport()
-      const ok = res.email_sent ? '✉ 已發送Email' : ''
-      const pdf = res.pdf_saved ? '  📄 PDF已儲存' : ''
-      setReportMsg(`報告生成完成 ${ok}${pdf}`)
+      const ok  = res.email_sent ? ' ✉ 已發送Email' : ''
+      const pdf = res.pdf_saved  ? ' PDF已儲存' : ''
+      setReportMsg(`報告生成完成${ok}${pdf}`)
       setHasPdf(!!res.pdf_saved)
       setActiveTab('report')
     } catch (e) {
-      setReportMsg('生成失敗：' + e.message)
+      if (e.message.includes('401') || e.message.includes('密鑰')) {
+        setReportMsg('密鑰錯誤，請重新設定')
+        setShowKeys(true)
+      } else {
+        setReportMsg('生成失敗：' + e.message)
+      }
     } finally {
       setGenerating(false)
     }
@@ -33,12 +50,9 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-[#0D0D0D] overflow-hidden">
-      {/* Top bar: market overview */}
       <MarketOverview />
 
-      {/* Main content */}
       <div className="flex flex-1 min-h-0">
-        {/* Left: watchlist */}
         <div className="w-56 flex-shrink-0 border-r border-[#2A2A2A] overflow-y-auto">
           <WatchlistPanel
             onSelect={(symbol, name) => {
@@ -49,14 +63,13 @@ export default function App() {
           />
         </div>
 
-        {/* Right: tabs + content */}
         <div className="flex flex-col flex-1 min-w-0">
           {/* Tab bar */}
           <div className="flex items-center gap-1 px-3 py-2 border-b border-[#2A2A2A] bg-[#141414] flex-shrink-0">
             {[
-              { id: 'chart', label: '📊 K線圖' },
-              { id: 'analysis', label: '🔍 個股分析' },
-              { id: 'report', label: '📋 每日報告' },
+              { id: 'chart',    label: 'K線圖' },
+              { id: 'analysis', label: '個股分析' },
+              { id: 'report',   label: '每日報告' },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -71,7 +84,6 @@ export default function App() {
               </button>
             ))}
 
-            {/* Interval toggle (only shown in chart tab) */}
             {activeTab === 'chart' && (
               <div className="flex gap-1 ml-4">
                 {[
@@ -95,7 +107,12 @@ export default function App() {
             )}
 
             <div className="ml-auto flex items-center gap-2">
-              {reportMsg && <span className="text-xs text-green-400">{reportMsg}</span>}
+              {reportMsg && (
+                <span className={`text-xs ${reportMsg.includes('失敗') || reportMsg.includes('錯誤') ? 'text-red-400' : 'text-green-400'}`}>
+                  {reportMsg}
+                </span>
+              )}
+
               {hasPdf && (
                 <a
                   href={api.downloadPdfUrl()}
@@ -103,27 +120,36 @@ export default function App() {
                   rel="noreferrer"
                   className="px-3 py-1 text-xs bg-[#1A237E] hover:bg-[#283593] text-blue-300 rounded transition-colors"
                 >
-                  📄 下載PDF
+                  下載PDF
                 </a>
               )}
+
               <button
                 onClick={handleGenerate}
                 disabled={generating}
                 className="px-3 py-1 text-xs bg-[#1B5E20] hover:bg-[#2E7D32] text-green-300 rounded disabled:opacity-50 transition-colors"
               >
-                {generating ? '⏳ 生成中...' : '▶ 生成每日報告'}
+                {generating ? '生成中...' : '生成每日報告'}
+              </button>
+
+              {/* Key settings button */}
+              <button
+                onClick={() => setShowKeys(true)}
+                title="設定存取密鑰"
+                className={`w-7 h-7 rounded flex items-center justify-center text-sm transition-colors border ${
+                  keyStatus === 'both'    ? 'border-green-700 text-green-400 hover:bg-green-900/30' :
+                  keyStatus === 'partial' ? 'border-yellow-700 text-yellow-400 hover:bg-yellow-900/30' :
+                                           'border-[#333] text-gray-500 hover:text-white hover:border-gray-500'
+                }`}
+              >
+                {keyStatus === 'none' ? '🔒' : '🔑'}
               </button>
             </div>
           </div>
 
-          {/* Content area */}
           <div className="flex-1 min-h-0 overflow-hidden">
             {activeTab === 'chart' && (
-              <StockChart
-                symbol={selected.symbol}
-                stockName={selected.name}
-                interval={interval}
-              />
+              <StockChart symbol={selected.symbol} stockName={selected.name} interval={interval} />
             )}
             {activeTab === 'analysis' && (
               <AnalysisPanel symbol={selected.symbol} stockName={selected.name} mode="single" />
@@ -134,6 +160,8 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {showKeys && <AccessKeyPanel onClose={() => setShowKeys(false)} />}
     </div>
   )
 }

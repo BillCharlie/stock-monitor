@@ -4,15 +4,22 @@ const BASE = import.meta.env.VITE_API_BASE_URL
   ? import.meta.env.VITE_API_BASE_URL.replace(/\/$/, '') + '/api'
   : '/api'
 
-// Secret for write endpoints — set VITE_API_SECRET in GitHub Secrets
-const API_SECRET = import.meta.env.VITE_API_SECRET || ''
+// Keys stored in browser localStorage — entered by user at runtime, never in source code
+export const keys = {
+  getReport: () => localStorage.getItem('sm_report_key') || '',
+  getStock:  () => localStorage.getItem('sm_stock_key')  || '',
+  setReport: (v) => localStorage.setItem('sm_report_key', v),
+  setStock:  (v) => localStorage.setItem('sm_stock_key', v),
+}
 
-function writeHeaders(extra = {}) {
-  return {
-    'Content-Type': 'application/json',
-    ...(API_SECRET ? { 'X-API-Secret': API_SECRET } : {}),
-    ...extra,
-  }
+function reportHeaders() {
+  const k = keys.getReport()
+  return { 'Content-Type': 'application/json', ...(k ? { 'X-API-Secret': k } : {}) }
+}
+
+function stockHeaders() {
+  const k = keys.getStock()
+  return { 'Content-Type': 'application/json', ...(k ? { 'X-API-Secret': k } : {}) }
 }
 
 async function request(path, options) {
@@ -39,9 +46,9 @@ export const api = {
 
   getDailyReport: () => request('/analysis/daily-report'),
 
-  generateReport: () => request('/analysis/generate', { method: 'POST', headers: writeHeaders() }),
+  generateReport: () => request('/analysis/generate', { method: 'POST', headers: reportHeaders() }),
 
-  triggerGptReport: () => request('/analysis/gpt-report', { method: 'POST', headers: writeHeaders() }),
+  triggerGptReport: () => request('/analysis/gpt-report', { method: 'POST', headers: reportHeaders() }),
 
   downloadPdfUrl: () => `${BASE}/analysis/download-report`,
 
@@ -51,13 +58,13 @@ export const api = {
   addCustomStock: (symbol, name) =>
     request('/custom-stocks', {
       method: 'POST',
-      headers: writeHeaders(),
+      headers: stockHeaders(),
       body: JSON.stringify({ symbol, name }),
     }),
 
   deleteCustomStock: (symbol) =>
     request(`/custom-stocks/${encodeURIComponent(symbol)}`, {
       method: 'DELETE',
-      headers: writeHeaders(),
+      headers: stockHeaders(),
     }),
 }
