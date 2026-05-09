@@ -5,6 +5,7 @@ Run: uvicorn main:app --reload --port 8765
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -129,11 +130,15 @@ async def lifespan(app: FastAPI):
 # GET endpoints are public — no token needed.
 # Set API_SECRET in .env; if left empty, write endpoints are localhost-only.
 
+def _sha256(s: str) -> str:
+    return hashlib.sha256(s.encode()).hexdigest()
+
+
 def _require_report_auth(x_api_secret: str = Header(default="")):
     secret = os.getenv("API_SECRET_REPORT", "").strip()
     if not secret:
         return
-    if x_api_secret != secret:
+    if x_api_secret != _sha256(secret):
         raise HTTPException(status_code=401, detail="報告密鑰錯誤")
 
 
@@ -141,7 +146,7 @@ def _require_stock_auth(x_api_secret: str = Header(default="")):
     secret = os.getenv("API_SECRET_STOCK", "").strip()
     if not secret:
         return
-    if x_api_secret != secret:
+    if x_api_secret != _sha256(secret):
         raise HTTPException(status_code=401, detail="股票管理密鑰錯誤")
 
 

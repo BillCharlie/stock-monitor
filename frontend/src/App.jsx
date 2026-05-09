@@ -16,8 +16,8 @@ export default function App() {
   const [showKeys, setShowKeys] = useState(false)
 
   // Show key indicator: lock icon is green if both keys are set, yellow if partial, gray if none
-  const hasReportKey = !!keys.getReport()
-  const hasStockKey  = !!keys.getStock()
+  const hasReportKey = keys.hasReport()
+  const hasStockKey  = keys.hasStock()
   const keyStatus = hasReportKey && hasStockKey ? 'both'
     : hasReportKey || hasStockKey ? 'partial' : 'none'
 

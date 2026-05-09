@@ -4,22 +4,26 @@ const BASE = import.meta.env.VITE_API_BASE_URL
   ? import.meta.env.VITE_API_BASE_URL.replace(/\/$/, '') + '/api'
   : '/api'
 
-// Keys stored in browser localStorage — entered by user at runtime, never in source code
+import { obfuscate, deobfuscate, hashKey } from './crypto.js'
+
+// Keys stored obfuscated in localStorage; only SHA-256 hash is ever sent over the wire.
 export const keys = {
-  getReport: () => localStorage.getItem('sm_report_key') || '',
-  getStock:  () => localStorage.getItem('sm_stock_key')  || '',
-  setReport: (v) => localStorage.setItem('sm_report_key', v),
-  setStock:  (v) => localStorage.setItem('sm_stock_key', v),
+  getReport: () => deobfuscate(localStorage.getItem('sm_report_key') || ''),
+  getStock:  () => deobfuscate(localStorage.getItem('sm_stock_key')  || ''),
+  setReport: (v) => localStorage.setItem('sm_report_key', obfuscate(v)),
+  setStock:  (v) => localStorage.setItem('sm_stock_key',  obfuscate(v)),
+  hasReport: () => !!localStorage.getItem('sm_report_key'),
+  hasStock:  () => !!localStorage.getItem('sm_stock_key'),
 }
 
-function reportHeaders() {
-  const k = keys.getReport()
-  return { 'Content-Type': 'application/json', ...(k ? { 'X-API-Secret': k } : {}) }
+async function reportHeaders() {
+  const hash = await hashKey(keys.getReport())
+  return { 'Content-Type': 'application/json', ...(hash ? { 'X-API-Secret': hash } : {}) }
 }
 
-function stockHeaders() {
-  const k = keys.getStock()
-  return { 'Content-Type': 'application/json', ...(k ? { 'X-API-Secret': k } : {}) }
+async function stockHeaders() {
+  const hash = await hashKey(keys.getStock())
+  return { 'Content-Type': 'application/json', ...(hash ? { 'X-API-Secret': hash } : {}) }
 }
 
 async function request(path, options) {
@@ -46,25 +50,25 @@ export const api = {
 
   getDailyReport: () => request('/analysis/daily-report'),
 
-  generateReport: () => request('/analysis/generate', { method: 'POST', headers: reportHeaders() }),
+  generateReport: async () => request('/analysis/generate', { method: 'POST', headers: await reportHeaders() }),
 
-  triggerGptReport: () => request('/analysis/gpt-report', { method: 'POST', headers: reportHeaders() }),
+  triggerGptReport: async () => request('/analysis/gpt-report', { method: 'POST', headers: await reportHeaders() }),
 
   downloadPdfUrl: () => `${BASE}/analysis/download-report`,
 
   // Custom stocks
   getCustomStocks: () => request('/custom-stocks'),
 
-  addCustomStock: (symbol, name) =>
+  addCustomStock: async (symbol, name) =>
     request('/custom-stocks', {
       method: 'POST',
-      headers: stockHeaders(),
+      headers: await stockHeaders(),
       body: JSON.stringify({ symbol, name }),
     }),
 
-  deleteCustomStock: (symbol) =>
+  deleteCustomStock: async (symbol) =>
     request(`/custom-stocks/${encodeURIComponent(symbol)}`, {
       method: 'DELETE',
-      headers: stockHeaders(),
+      headers: await stockHeaders(),
     }),
 }
