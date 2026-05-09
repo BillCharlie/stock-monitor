@@ -13,14 +13,14 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from analysis import analyze_stock, generate_daily_report
-from email_sender import send_daily_report
+from email_sender import send_daily_report, send_login_notification
 from gpt_analysis import generate_gpt_report
 from news_fetcher import fetch_all_news, fetch_category_news, get_last_updated, NEWS_CATEGORIES
 from pdf_generator import latest_report_path, save_report_pdf
@@ -164,6 +164,34 @@ def _require_stock_auth(x_api_secret: str = Header(default="")):
         raise HTTPException(status_code=401, detail="股票管理密鑰錯誤")
 
 
+def _get_real_ip(request: Request) -> str:
+    """Return the real client IP, respecting Cloudflare and reverse-proxy headers."""
+    for header in ("CF-Connecting-IP", "X-Real-IP"):
+        val = request.headers.get(header, "").strip()
+        if val:
+            return val
+    forwarded = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _lookup_geo(ip: str) -> dict:
+    import requests as _req
+    try:
+        r = _req.get(
+            f"https://ip-api.com/json/{ip}",
+            params={"fields": "status,country,regionName,city,lat,lon,isp"},
+            timeout=6,
+        )
+        data = r.json()
+        if data.get("status") == "success":
+            return data
+    except Exception as e:
+        logger.warning("Geo lookup failed for %s: %s", ip, e)
+    return {}
+
+
 app = FastAPI(title="Stock Monitor API", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
@@ -173,6 +201,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ─── Auth ping (login notification) ──────────────────────────────────────────
+
+@app.post("/api/auth/ping")
+async def auth_ping(request: Request, x_api_secret: str = Header(default="")):
+    """
+    Verify a key and fire a login-notification email.
+    Returns {"verified": true/false} immediately; email is sent in background.
+    """
+    report_secret = os.getenv("API_SECRET_REPORT", "").strip()
+    stock_secret  = os.getenv("API_SECRET_STOCK", "").strip()
+
+    key_type: str | None = None
+    if report_secret and x_api_secret == _sha256(report_secret):
+        key_type = "report"
+    elif stock_secret and x_api_secret == _sha256(stock_secret):
+        key_type = "stock"
+
+    if not key_type:
+        return {"verified": False}
+
+    real_ip = _get_real_ip(request)
+
+    def _notify():
+        geo = _lookup_geo(real_ip)
+        send_login_notification(real_ip, key_type, geo)
+
+    import threading
+    threading.Thread(target=_notify, daemon=True).start()
+
+    return {"verified": True, "key_type": key_type}
 
 
 # ─── Watchlist ────────────────────────────────────────────────────────────────

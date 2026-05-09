@@ -131,6 +131,81 @@ def _wrap_email_template(content_html: str, date_str: str, generated_at: str) ->
 </html>"""
 
 
+def send_login_notification(ip: str, key_type: str, geo: dict) -> None:
+    """Send a security alert when someone successfully authenticates."""
+    sender   = os.getenv("GMAIL_SENDER", "").strip()
+    password = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
+    alert_to = "chenbill718@gmail.com"
+
+    if not sender or not password or password == "xxxxxxxxxxxxxxxx":
+        logger.warning("Gmail not configured — login notification skipped")
+        return
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    country     = geo.get("country", "未知")
+    region      = geo.get("regionName", "")
+    city        = geo.get("city", "")
+    isp         = geo.get("isp", "")
+    lat         = geo.get("lat", "")
+    lon         = geo.get("lon", "")
+    maps_link   = f"https://www.google.com/maps?q={lat},{lon}" if lat and lon else ""
+    location    = ", ".join(filter(None, [city, region, country]))
+
+    maps_html = (
+        f'<a href="{maps_link}" style="color:#40C4FF">在 Google Maps 查看</a>'
+        if maps_link else "無法取得座標"
+    )
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-TW">
+<head><meta charset="UTF-8">
+<style>
+  body {{ background:#0D0D0D; color:#E0E0E0; font-family:-apple-system,'PingFang TC',Arial,sans-serif; font-size:14px; margin:0; padding:0; }}
+  .wrap {{ max-width:520px; margin:0 auto; padding:24px 16px; }}
+  .card {{ background:#1A1A1A; border:1px solid #FF5252; border-radius:8px; padding:24px; }}
+  h2   {{ color:#FF5252; margin:0 0 16px; font-size:18px; }}
+  .row {{ display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #222; }}
+  .lbl {{ color:#888; font-size:12px; }}
+  .val {{ color:#E0E0E0; font-size:13px; font-weight:500; }}
+  .footer {{ color:#333; font-size:11px; text-align:center; margin-top:16px; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h2>🔐 密鑰登入警報</h2>
+    <div class="row"><span class="lbl">時間</span><span class="val">{now} (本地)</span></div>
+    <div class="row"><span class="lbl">密鑰類型</span><span class="val">{key_type}</span></div>
+    <div class="row"><span class="lbl">IP 地址</span><span class="val">{ip}</span></div>
+    <div class="row"><span class="lbl">國家</span><span class="val">{country}</span></div>
+    <div class="row"><span class="lbl">地區 / 城市</span><span class="val">{location or '未知'}</span></div>
+    <div class="row"><span class="lbl">ISP / 運營商</span><span class="val">{isp or '未知'}</span></div>
+    <div class="row"><span class="lbl">座標</span><span class="val">{maps_html}</span></div>
+  </div>
+  <div class="footer">此為股市監控系統自動安全警報，若非本人操作請立即更換密鑰。</div>
+</div>
+</body>
+</html>"""
+
+    key_label = {"report": "報告生成密鑰", "stock": "股票管理密鑰"}.get(key_type, key_type)
+    subject = f"[股市監控] 🔐 密鑰登入警報 — {key_label} | {location or ip} | {now[:16]}"
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = f"股市監控安全警報 <{sender}>"
+    msg["To"]      = alert_to
+    msg.attach(MIMEText(html, "html", "utf-8"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as server:
+            server.login(sender, password)
+            server.sendmail(sender, [alert_to], msg.as_bytes())
+        logger.info("Login notification sent to %s (IP: %s, %s)", alert_to, ip, location)
+    except Exception as e:
+        logger.error("Login notification email failed: %s", e)
+
+
 def send_daily_report(html_content: str, daily_report: dict, pdf_path: str | None = None) -> bool:
     """
     Send the daily report email via Gmail SMTP.

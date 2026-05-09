@@ -87,6 +87,11 @@ export const api = {
       headers: await stockHeaders(),
     }),
 
+  pingAuth: async (type) => request('/auth/ping', {
+    method: 'POST',
+    headers: await (type === 'report' ? reportHeaders() : stockHeaders()),
+  }),
+
   getNews: (category = null, force = false) => {
     const params = new URLSearchParams()
     if (category) params.set('category', category)
