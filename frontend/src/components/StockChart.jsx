@@ -27,7 +27,7 @@ const baseChartOptions = (height) => ({
     horzLines: { color: GRID_COLOR },
   },
   crosshair: { mode: CrosshairMode.Normal },
-  rightPriceScale: { borderColor: BORDER_COLOR },
+  rightPriceScale: { borderColor: BORDER_COLOR, minimumWidth: 60 },
   timeScale: {
     borderColor: BORDER_COLOR,
     timeVisible: true,
@@ -51,13 +51,15 @@ function syncLogicalRange(source, targets) {
 }
 
 // Align right price-scale widths so time axes line up across all sub-charts.
-// Called after data load and after resize (double-RAF so the browser has painted).
+// Called twice (at 50ms and 300ms) to survive fitContent() re-layouts.
 function syncPriceScaleWidths(charts) {
-  requestAnimationFrame(() => requestAnimationFrame(() => {
+  const doSync = () => {
     const widths = charts.map(c => { try { return c.priceScale('right').width() } catch { return 0 } })
     const maxW = Math.max(...widths)
     if (maxW > 0) charts.forEach(c => c.applyOptions({ rightPriceScale: { minimumWidth: maxW } }))
-  }))
+  }
+  setTimeout(doSync, 50)
+  setTimeout(doSync, 300)
 }
 
 export default function StockChart({ symbol, stockName, interval }) {
@@ -81,7 +83,7 @@ export default function StockChart({ symbol, stockName, interval }) {
     if (!mainRef.current) return
 
     const main = createChart(mainRef.current, baseChartOptions(380))
-    const vol  = createChart(volRef.current,  { ...baseChartOptions(75), rightPriceScale: { borderColor: BORDER_COLOR, scaleMargins: { top: 0.1, bottom: 0 } } })
+    const vol  = createChart(volRef.current,  { ...baseChartOptions(75), rightPriceScale: { borderColor: BORDER_COLOR, minimumWidth: 60, scaleMargins: { top: 0.1, bottom: 0 } } })
     const rsi  = createChart(rsiRef.current,  { ...baseChartOptions(75) })
     const kd   = createChart(kdRef.current,   { ...baseChartOptions(75) })
 
