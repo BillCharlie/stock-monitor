@@ -130,9 +130,11 @@ export default function StockChart({ symbol, stockName, interval }) {
       if (d) setOhlcInfo(d)
     })
 
-    // Time scale sync: main drives others
+    // Time scale sync: all four charts drive each other
     syncLogicalRange(main, [vol, rsi, kd])
     syncLogicalRange(vol,  [main, rsi, kd])
+    syncLogicalRange(rsi,  [main, vol, kd])
+    syncLogicalRange(kd,   [main, vol, rsi])
 
     // Resize observer
     const ro = new ResizeObserver(() => {
