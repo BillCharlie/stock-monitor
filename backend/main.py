@@ -37,8 +37,9 @@ from watchlist import MARKET_INDICES, WATCHLIST
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-CUSTOM_STOCKS_FILE = os.path.join(os.path.dirname(__file__), "custom_stocks.json")
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+CUSTOM_STOCKS_FILE    = os.path.join(os.path.dirname(__file__), "custom_stocks.json")
+USER_WATCHLIST_FILE   = os.path.join(os.path.dirname(__file__), "user_watchlist.json")
+STATIC_DIR            = os.path.join(os.path.dirname(__file__), "static")
 
 # ─── In-memory caches ─────────────────────────────────────────────────────────
 _daily_report: dict = {}
@@ -58,6 +59,33 @@ def load_custom_stocks() -> list:
 def save_custom_stocks(stocks: list) -> None:
     with open(CUSTOM_STOCKS_FILE, "w", encoding="utf-8") as f:
         json.dump({"stocks": stocks}, f, ensure_ascii=False, indent=2)
+
+
+def load_user_watchlist() -> dict:
+    if not os.path.exists(USER_WATCHLIST_FILE):
+        return {}
+    try:
+        with open(USER_WATCHLIST_FILE, encoding="utf-8") as f:
+            return json.load(f).get("watchlist", {})
+    except Exception:
+        return {}
+
+
+def save_user_watchlist(wl: dict) -> None:
+    with open(USER_WATCHLIST_FILE, "w", encoding="utf-8") as f:
+        json.dump({"watchlist": wl}, f, ensure_ascii=False, indent=2)
+
+
+def _check_watchlist_depth(node, depth: int = 0) -> None:
+    if depth > 5:
+        raise HTTPException(status_code=400, detail="目錄最多5層")
+    if isinstance(node, dict):
+        for v in node.values():
+            _check_watchlist_depth(v, depth + 1)
+    elif isinstance(node, list):
+        for item in node:
+            if not isinstance(item, dict) or "symbol" not in item:
+                raise HTTPException(status_code=400, detail="股票格式錯誤（需含 symbol 欄位）")
 
 
 # ─── Cached GPT report ────────────────────────────────────────────────────────
@@ -240,10 +268,28 @@ async def auth_ping(request: Request, x_api_secret: str = Header(default="")):
 @app.get("/api/watchlist")
 def get_watchlist():
     cats = dict(WATCHLIST)
+    user_wl = load_user_watchlist()
+    cats.update(user_wl)           # user categories merge on top of built-ins
     custom = load_custom_stocks()
     if custom:
-        cats["自訂觀察清單"] = custom  # flat array; TreeNode handles it directly
+        cats["自訂觀察清單"] = custom  # individual custom stocks always at end
     return {"categories": cats}
+
+
+# ─── User watchlist (editable categories) ─────────────────────────────────────
+
+class UserWatchlistBody(BaseModel):
+    watchlist: dict
+
+@app.get("/api/user-watchlist")
+def get_user_watchlist():
+    return {"watchlist": load_user_watchlist()}
+
+@app.put("/api/user-watchlist", dependencies=[Depends(_require_stock_auth)])
+def put_user_watchlist(body: UserWatchlistBody):
+    _check_watchlist_depth(body.watchlist)
+    save_user_watchlist(body.watchlist)
+    return {"status": "ok"}
 
 
 # ─── Custom stocks ────────────────────────────────────────────────────────────

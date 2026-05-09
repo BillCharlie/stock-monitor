@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api, keys } from '../api/stocks.js'
+import WatchlistEditor from './WatchlistEditor.jsx'
 
 // ── Depth-based style config ───────────────────────────────────────────────────
 const DEPTH_STYLES = [
@@ -206,6 +207,7 @@ export default function WatchlistPanel({ onSelect, selectedSymbol, onNeedKey }) 
   const [categories, setCategories] = useState({})
   const [search, setSearch] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
+  const [showEditor, setShowEditor] = useState(false)
 
   const loadWatchlist = useCallback(() => {
     api.getWatchlist().then(data => setCategories(data.categories || {})).catch(() => {})
@@ -267,6 +269,14 @@ export default function WatchlistPanel({ onSelect, selectedSymbol, onNeedKey }) 
           className="flex-shrink-0 w-6 h-6 bg-blue-800 hover:bg-blue-700 text-white rounded text-xs flex items-center justify-center"
           title="新增自訂股票"
         >+</button>
+        <button
+          onClick={() => {
+            if (!keys.hasStock()) { onNeedKey?.(); return }
+            setShowEditor(true)
+          }}
+          className="flex-shrink-0 w-6 h-6 bg-[#1A2A1A] hover:bg-[#1A3A1A] text-green-400 rounded text-xs flex items-center justify-center"
+          title="編輯自訂分類"
+        >✎</button>
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -288,6 +298,13 @@ export default function WatchlistPanel({ onSelect, selectedSymbol, onNeedKey }) 
         <AddStockModal
           onClose={() => setShowAddModal(false)}
           onAdd={loadWatchlist}
+        />
+      )}
+
+      {showEditor && (
+        <WatchlistEditor
+          onClose={() => setShowEditor(false)}
+          onSaved={() => { setShowEditor(false); loadWatchlist() }}
         />
       )}
     </div>

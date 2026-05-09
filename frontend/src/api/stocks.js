@@ -87,6 +87,14 @@ export const api = {
       headers: await stockHeaders(),
     }),
 
+  getUserWatchlist: () => request('/user-watchlist'),
+
+  saveUserWatchlist: async (watchlist) => request('/user-watchlist', {
+    method: 'PUT',
+    headers: await stockHeaders(),
+    body: JSON.stringify({ watchlist }),
+  }),
+
   pingAuth: async (type) => request('/auth/ping', {
     method: 'POST',
     headers: await (type === 'report' ? reportHeaders() : stockHeaders()),
