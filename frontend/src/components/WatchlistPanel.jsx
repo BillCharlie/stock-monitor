@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { api } from '../api/stocks.js'
+import { api, keys } from '../api/stocks.js'
 
 // ── Depth-based style config ───────────────────────────────────────────────────
 const DEPTH_STYLES = [
@@ -202,7 +202,7 @@ function AddStockModal({ onClose, onAdd }) {
 }
 
 // ── Main WatchlistPanel ────────────────────────────────────────────────────────
-export default function WatchlistPanel({ onSelect, selectedSymbol }) {
+export default function WatchlistPanel({ onSelect, selectedSymbol, onNeedKey }) {
   const [categories, setCategories] = useState({})
   const [search, setSearch] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
@@ -214,6 +214,7 @@ export default function WatchlistPanel({ onSelect, selectedSymbol }) {
   useEffect(() => { loadWatchlist() }, [loadWatchlist])
 
   const handleDeleteCustom = async (symbol) => {
+    if (!keys.hasStock()) { onNeedKey?.(); return }
     try {
       await api.deleteCustomStock(symbol)
       loadWatchlist()
@@ -259,7 +260,10 @@ export default function WatchlistPanel({ onSelect, selectedSymbol }) {
           className="flex-1 bg-[#1A1A1A] border border-[#2A2A2A] rounded px-2 py-1 text-[11px] text-gray-300 placeholder-gray-600 outline-none focus:border-blue-700"
         />
         <button
-          onClick={() => setShowAddModal(true)}
+          onClick={() => {
+            if (!keys.hasStock()) { onNeedKey?.(); return }
+            setShowAddModal(true)
+          }}
           className="flex-shrink-0 w-6 h-6 bg-blue-800 hover:bg-blue-700 text-white rounded text-xs flex items-center justify-center"
           title="新增自訂股票"
         >+</button>

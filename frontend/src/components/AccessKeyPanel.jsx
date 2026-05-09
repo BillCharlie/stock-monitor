@@ -37,7 +37,7 @@ export default function AccessKeyPanel({ onClose }) {
             placeholder="輸入報告密鑰..."
             className="w-full bg-[#0D0D0D] border border-[#333] rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
           />
-          <p className="text-gray-600 text-xs mt-1">用於「生成每日報告」按鈕</p>
+          <p className="text-gray-600 text-xs mt-1">用於「生成每日報告」與「新聞重新整理」</p>
         </div>
 
         <div className="mb-5">

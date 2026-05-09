@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { api } from '../api/stocks.js'
+import { api, keys } from '../api/stocks.js'
 
 const CATEGORIES = [
   'IC設計', 'IC代工', '封裝測試', '系統模組PCB',
@@ -53,7 +53,7 @@ function NewsCard({ article }) {
   )
 }
 
-export default function NewsPanel() {
+export default function NewsPanel({ onNeedKey }) {
   const [activeCategory, setActiveCategory] = useState(CATEGORIES[0])
   const [newsData, setNewsData] = useState({})
   const [lastUpdated, setLastUpdated] = useState({})
@@ -109,7 +109,10 @@ export default function NewsPanel() {
           {loading && <span className="text-[9px] text-blue-400">載入中...</span>}
           {error && <span className="text-[9px] text-red-400">{error}</span>}
           <button
-            onClick={() => loadNews(true)}
+            onClick={() => {
+              if (!keys.hasReport()) { onNeedKey?.(); return }
+              loadNews(true)
+            }}
             disabled={loading}
             className="text-[9px] text-gray-500 hover:text-gray-300 disabled:opacity-40 border border-[#2A2A2A] px-2 py-0.5 rounded"
           >

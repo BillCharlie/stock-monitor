@@ -61,6 +61,7 @@ export default function App() {
               setActiveTab('chart')
             }}
             selectedSymbol={selected.symbol}
+            onNeedKey={() => setShowKeys(true)}
           />
         </div>
 
@@ -160,7 +161,7 @@ export default function App() {
               <AnalysisPanel symbol={selected.symbol} stockName={selected.name} mode="report" />
             )}
             {activeTab === 'news' && (
-              <NewsPanel />
+              <NewsPanel onNeedKey={() => setShowKeys(true)} />
             )}
           </div>
         </div>
