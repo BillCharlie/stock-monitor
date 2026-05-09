@@ -50,6 +50,16 @@ function syncLogicalRange(source, targets) {
   })
 }
 
+// Align right price-scale widths so time axes line up across all sub-charts.
+// Called after data load and after resize (double-RAF so the browser has painted).
+function syncPriceScaleWidths(charts) {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const widths = charts.map(c => { try { return c.priceScale('right').width() } catch { return 0 } })
+    const maxW = Math.max(...widths)
+    if (maxW > 0) charts.forEach(c => c.applyOptions({ rightPriceScale: { minimumWidth: maxW } }))
+  }))
+}
+
 export default function StockChart({ symbol, stockName, interval }) {
   const mainRef    = useRef(null)
   const volRef     = useRef(null)
@@ -71,7 +81,7 @@ export default function StockChart({ symbol, stockName, interval }) {
     if (!mainRef.current) return
 
     const main = createChart(mainRef.current, baseChartOptions(380))
-    const vol  = createChart(volRef.current,  { ...baseChartOptions(75), rightPriceScale: { visible: false, borderColor: BORDER_COLOR } })
+    const vol  = createChart(volRef.current,  { ...baseChartOptions(75), rightPriceScale: { borderColor: BORDER_COLOR, scaleMargins: { top: 0.1, bottom: 0 } } })
     const rsi  = createChart(rsiRef.current,  { ...baseChartOptions(75) })
     const kd   = createChart(kdRef.current,   { ...baseChartOptions(75) })
 
@@ -105,10 +115,8 @@ export default function StockChart({ symbol, stockName, interval }) {
     // Volume
     const volume = vol.addHistogramSeries({
       priceFormat: { type: 'volume' },
-      priceScaleId: '',
       scaleMargins: { top: 0.1, bottom: 0 },
     })
-    vol.priceScale('').applyOptions({ scaleMargins: { top: 0.1, bottom: 0 } })
 
     // RSI
     const rsiLine = rsi.addLineSeries({ color: '#FF9800', lineWidth: 1, lastValueVisible: true, priceLineVisible: false })
@@ -143,6 +151,7 @@ export default function StockChart({ symbol, stockName, interval }) {
       vol.resize(w, 75)
       rsi.resize(w, 75)
       kd.resize(w, 75)
+      syncPriceScaleWidths([main, vol, rsi, kd])
     })
     ro.observe(mainRef.current)
 
@@ -197,6 +206,8 @@ export default function StockChart({ symbol, stockName, interval }) {
       kd20.setData(kdTimes.map(t => ({ time: t, value: 20 })))
 
       chartsRef.current.main.timeScale().fitContent()
+      const { main, vol, rsi, kd } = chartsRef.current
+      syncPriceScaleWidths([main, vol, rsi, kd])
     } catch (e) {
       setError(e.message)
     } finally {
