@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from analysis import analyze_stock, generate_daily_report
 from email_sender import send_daily_report
 from gpt_analysis import generate_gpt_report
+from news_fetcher import fetch_all_news, fetch_category_news, get_last_updated, NEWS_CATEGORIES
 from pdf_generator import latest_report_path, save_report_pdf
 from indicators import (
     calculate_bollinger_bands,
@@ -30,7 +31,7 @@ from indicators import (
     calculate_rsi,
     series_to_list,
 )
-from stock_data import df_to_ohlcv_list, get_ohlcv, get_quote
+from stock_data import df_to_ohlcv_list, get_investors_data, get_ohlcv, get_quote
 from watchlist import MARKET_INDICES, WATCHLIST
 
 logging.basicConfig(level=logging.INFO)
@@ -69,7 +70,7 @@ def _run_daily_analysis():
     full_wl = dict(WATCHLIST)
     custom = load_custom_stocks()
     if custom:
-        full_wl["自訂觀察清單"] = {"自訂": custom}
+        full_wl["自訂觀察清單"] = custom
     report = generate_daily_report(full_wl)
     _daily_report = report
     _stock_analyses = report.get("all_results", {})
@@ -105,8 +106,15 @@ def _run_morning_email():
     _generate_and_deliver(trigger="scheduler")
 
 
+def _refresh_news():
+    logger.info("Refreshing news cache for all categories...")
+    fetch_all_news(force=True)
+    logger.info("News cache refresh complete.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import threading
     report_hour   = int(os.getenv("REPORT_HOUR", "7"))
     report_minute = int(os.getenv("REPORT_MINUTE", "0"))
 
@@ -119,8 +127,14 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(_run_morning_email, "cron",
                       day_of_week="mon-fri", hour=report_hour, minute=report_minute,
                       id="morning_email")
+    # Daily news refresh at 07:30
+    scheduler.add_job(_refresh_news, "cron", hour=7, minute=30, id="news_refresh")
     scheduler.start()
     logger.info(f"Scheduler started — morning email at {report_hour:02d}:{report_minute:02d} (Asia/Taipei)")
+
+    # Background initial news fetch (only fills cache if missing/stale)
+    threading.Thread(target=fetch_all_news, daemon=True).start()
+
     yield
     scheduler.shutdown()
 
@@ -168,7 +182,7 @@ def get_watchlist():
     cats = dict(WATCHLIST)
     custom = load_custom_stocks()
     if custom:
-        cats["自訂觀察清單"] = {"自訂": custom}
+        cats["自訂觀察清單"] = custom  # flat array; TreeNode handles it directly
     return {"categories": cats}
 
 
@@ -249,6 +263,13 @@ def get_stock_quote(symbol: str):
     return get_quote(symbol)
 
 
+# ─── Investor / institutional data ────────────────────────────────────────────
+
+@app.get("/api/stocks/{symbol}/investors")
+def get_stock_investors(symbol: str):
+    return get_investors_data(symbol)
+
+
 # ─── Analysis ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/stocks/{symbol}/analysis")
@@ -326,6 +347,37 @@ def get_gpt_report():
 @app.get("/api/health")
 def health():
     return {"status": "ok", "stocks_analyzed": len(_stock_analyses), "port": 8765}
+
+
+# ─── News ─────────────────────────────────────────────────────────────────────
+
+@app.get("/api/news")
+def get_news(
+    category: Optional[str] = Query(None),
+    force: bool = Query(False),
+):
+    """
+    GET /api/news               → all categories with their articles
+    GET /api/news?category=IC設計 → single category
+    GET /api/news?force=true    → bypass cache and re-fetch
+    """
+    if category:
+        if category not in NEWS_CATEGORIES:
+            raise HTTPException(status_code=404, detail=f"Unknown category: {category}")
+        articles = fetch_category_news(category, force=force)
+        return {
+            "categories": [category],
+            "news": {category: articles},
+            "last_updated": get_last_updated(),
+        }
+    news = {}
+    for cat in NEWS_CATEGORIES:
+        news[cat] = fetch_category_news(cat, force=force)
+    return {
+        "categories": list(NEWS_CATEGORIES.keys()),
+        "news": news,
+        "last_updated": get_last_updated(),
+    }
 
 
 # ─── PDF report download ──────────────────────────────────────────────────────

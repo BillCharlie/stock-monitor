@@ -1,10 +1,22 @@
-// API base: use VITE_API_BASE_URL env var when deployed to GitHub Pages,
-// otherwise fall back to same-origin /api (local FastAPI backend).
-const BASE = import.meta.env.VITE_API_BASE_URL
-  ? import.meta.env.VITE_API_BASE_URL.replace(/\/$/, '') + '/api'
-  : '/api'
-
 import { obfuscate, deobfuscate, hashKey } from './crypto.js'
+
+// BASE is initialized at runtime from api-config.json (GitHub Pages) or falls back to /api (local).
+// This avoids baking a dynamic tunnel URL into the JS bundle at build time.
+let BASE = '/api'
+
+const _configReady = (async () => {
+  try {
+    const res = await fetch(`${import.meta.env.BASE_URL}api-config.json`)
+    if (res.ok) {
+      const cfg = await res.json()
+      if (cfg.apiBaseUrl) {
+        BASE = cfg.apiBaseUrl.replace(/\/$/, '') + '/api'
+      }
+    }
+  } catch {
+    // local mode: no config file, BASE stays '/api'
+  }
+})()
 
 // Keys stored obfuscated in localStorage; only SHA-256 hash is ever sent over the wire.
 export const keys = {
@@ -27,6 +39,7 @@ async function stockHeaders() {
 }
 
 async function request(path, options) {
+  await _configReady
   const res = await fetch(BASE + path, options)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
@@ -42,6 +55,8 @@ export const api = {
     request(`/stocks/${encodeURIComponent(symbol)}/kline?interval=${interval}${refresh ? '&refresh=true' : ''}`),
 
   getQuote: (symbol) => request(`/stocks/${encodeURIComponent(symbol)}/quote`),
+
+  getInvestors: (symbol) => request(`/stocks/${encodeURIComponent(symbol)}/investors`),
 
   getAnalysis: (symbol, name = '') =>
     request(`/stocks/${encodeURIComponent(symbol)}/analysis?name=${encodeURIComponent(name)}`),
@@ -71,4 +86,12 @@ export const api = {
       method: 'DELETE',
       headers: await stockHeaders(),
     }),
+
+  getNews: (category = null, force = false) => {
+    const params = new URLSearchParams()
+    if (category) params.set('category', category)
+    if (force) params.set('force', 'true')
+    const qs = params.toString()
+    return request(`/news${qs ? '?' + qs : ''}`)
+  },
 }

@@ -1,22 +1,24 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '../api/stocks.js'
 
-// ── Depth-based indent and style config ───────────────────────────────────────
+// ── Depth-based style config ───────────────────────────────────────────────────
 const DEPTH_STYLES = [
-  // depth 0 — top level (台灣 / 美國 / 自訂)
+  // depth 0 — 台灣 / 美國
   'bg-[#0F1A2A] text-blue-300 font-bold text-[11px] uppercase tracking-wide border-b border-[#1A2A3A]',
   // depth 1 — 半導體 / 資源
   'bg-[#111B11] text-green-300 font-semibold text-[11px] border-b border-[#1A2A1A]',
-  // depth 2 — CPU/GPU產業 / 記憶體 etc
+  // depth 2 — CPU/GPU產業 / 記憶體產業 etc
   'bg-[#141414] text-yellow-200 font-medium text-[10px] border-b border-[#222]',
-  // depth 3 — IC設計 / IC製造 etc
-  'bg-[#0D0D0D] text-gray-400 text-[10px] border-b border-[#1A1A1A]',
+  // depth 3 — IC設計 / IC代工 / DRAM產業 etc
+  'bg-[#0D0D0D] text-[#9CDCFE] text-[10px] border-b border-[#1A1A1A]',
+  // depth 4+ — extra nesting fallback
+  'bg-[#0A0A0A] text-gray-500 text-[10px] border-b border-[#181818]',
 ]
 
 // ── Individual stock row ───────────────────────────────────────────────────────
 function StockRow({ stock, isSelected, onClick, onDelete, depth }) {
   const [quote, setQuote] = useState(null)
-  const indent = Math.min(depth, 3) * 10 + 8
+  const indent = Math.min(depth, 5) * 10 + 8
 
   useEffect(() => {
     let cancelled = false
@@ -25,7 +27,7 @@ function StockRow({ stock, isSelected, onClick, onDelete, depth }) {
   }, [stock.symbol])
 
   const isUp = quote?.change_pct >= 0
-  const priceColor = quote ? (isUp ? 'text-[#26A69A]' : 'text-[#EF5350]') : 'text-gray-600'
+  const priceColor = quote ? (isUp ? 'text-[#EF5350]' : 'text-[#26A69A]') : 'text-gray-600'
 
   return (
     <div
@@ -64,34 +66,44 @@ function StockRow({ stock, isSelected, onClick, onDelete, depth }) {
 
 // ── Recursive tree node ────────────────────────────────────────────────────────
 function TreeNode({ name, node, depth, onSelect, selectedSymbol, onDelete, isCustom }) {
-  // Auto-collapse deep nodes; expand top-level by default
   const [collapsed, setCollapsed] = useState(depth >= 2)
+  const styleIdx = Math.min(depth, DEPTH_STYLES.length - 1)
+  const indent = depth * 8
 
+  // ── Leaf: array of stocks ──────────────────────────────────────────────────
   if (Array.isArray(node)) {
     if (node.length === 0) return null
     return (
       <div>
-        {node.map(stock => (
-          <StockRow
-            key={stock.symbol}
-            stock={stock}
-            depth={depth}
-            isSelected={selectedSymbol === stock.symbol}
-            onClick={() => onSelect(stock.symbol, stock.name)}
-            onDelete={isCustom ? onDelete : null}
-          />
-        ))}
+        <button
+          onClick={() => setCollapsed(c => !c)}
+          className={`w-full flex items-center justify-between px-2 py-1.5 hover:brightness-125 transition-all ${DEPTH_STYLES[styleIdx]}`}
+          style={{ paddingLeft: 8 + indent }}
+        >
+          <span className="truncate">{name}</span>
+          <span className="text-[9px] opacity-50 flex-shrink-0 ml-1">
+            {collapsed ? `▶ ${node.length}` : '▼'}
+          </span>
+        </button>
+        {!collapsed && (
+          <div>
+            {node.map(stock => (
+              <StockRow
+                key={stock.symbol}
+                stock={stock}
+                depth={depth + 1}
+                isSelected={selectedSymbol === stock.symbol}
+                onClick={() => onSelect(stock.symbol, stock.name)}
+                onDelete={isCustom ? onDelete : null}
+              />
+            ))}
+          </div>
+        )}
       </div>
     )
   }
 
-  // Branch node
-  const styleIdx = Math.min(depth, DEPTH_STYLES.length - 1)
-  const childCount = Object.values(node).reduce((acc, v) =>
-    acc + (Array.isArray(v) ? v.length : 0), 0
-  )
-  const indent = depth * 8
-
+  // ── Branch: dict of sub-nodes ──────────────────────────────────────────────
   return (
     <div>
       <button
@@ -113,7 +125,7 @@ function TreeNode({ name, node, depth, onSelect, selectedSymbol, onDelete, isCus
               onSelect={onSelect}
               selectedSymbol={selectedSymbol}
               onDelete={onDelete}
-              isCustom={isCustom || name === '自訂觀察清單'}
+              isCustom={isCustom}
             />
           ))}
         </div>
@@ -210,7 +222,6 @@ export default function WatchlistPanel({ onSelect, selectedSymbol }) {
     }
   }
 
-  // Filter: flatten all leaf stocks and check if name/symbol matches
   const filterNode = (node, query) => {
     if (Array.isArray(node)) {
       const filtered = node.filter(s =>
@@ -239,7 +250,6 @@ export default function WatchlistPanel({ onSelect, selectedSymbol }) {
 
   return (
     <div className="flex flex-col h-full bg-[#0A0A0A]">
-      {/* Search + Add button */}
       <div className="flex items-center gap-1 px-2 py-2 border-b border-[#2A2A2A]">
         <input
           type="text"
@@ -255,7 +265,6 @@ export default function WatchlistPanel({ onSelect, selectedSymbol }) {
         >+</button>
       </div>
 
-      {/* Tree */}
       <div className="flex-1 overflow-y-auto">
         {Object.entries(filtered).map(([key, val]) => (
           <TreeNode
@@ -271,7 +280,6 @@ export default function WatchlistPanel({ onSelect, selectedSymbol }) {
         ))}
       </div>
 
-      {/* Add modal */}
       {showAddModal && (
         <AddStockModal
           onClose={() => setShowAddModal(false)}

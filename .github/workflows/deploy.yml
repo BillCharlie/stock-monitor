@@ -41,9 +41,7 @@ jobs:
         working-directory: frontend
         env:
           GITHUB_PAGES: 'true'
-          # Set VITE_API_BASE_URL in repo Settings → Secrets → Actions
-          # Example: https://your-tunnel.trycloudflare.com
-          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          # API URL is loaded at runtime from public/api-config.json — no secret needed here.
           VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH || '/stock-monitor/' }}
         run: npm run build
 

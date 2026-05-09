@@ -3,6 +3,7 @@ import MarketOverview from './components/MarketOverview.jsx'
 import WatchlistPanel from './components/WatchlistPanel.jsx'
 import StockChart from './components/StockChart.jsx'
 import AnalysisPanel from './components/AnalysisPanel.jsx'
+import NewsPanel from './components/NewsPanel.jsx'
 import AccessKeyPanel from './components/AccessKeyPanel.jsx'
 import { api, keys } from './api/stocks.js'
 
@@ -70,6 +71,7 @@ export default function App() {
               { id: 'chart',    label: 'K線圖' },
               { id: 'analysis', label: '個股分析' },
               { id: 'report',   label: '每日報告' },
+              { id: 'news',     label: '消息面' },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -156,6 +158,9 @@ export default function App() {
             )}
             {activeTab === 'report' && (
               <AnalysisPanel symbol={selected.symbol} stockName={selected.name} mode="report" />
+            )}
+            {activeTab === 'news' && (
+              <NewsPanel />
             )}
           </div>
         </div>

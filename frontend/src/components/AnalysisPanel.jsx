@@ -50,7 +50,7 @@ function PredictionCard({ pred, label }) {
       <div className="text-xs text-gray-400 mb-1">{label} ({pred.method})</div>
       <div className="flex items-baseline gap-3">
         <span className="text-lg font-mono text-white">{pred.pred_price?.toLocaleString()}</span>
-        <span className={`text-sm font-mono ${isUp ? 'text-[#26A69A]' : 'text-[#EF5350]'}`}>
+        <span className={`text-sm font-mono ${isUp ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>
           {isUp ? '+' : ''}{pred.pred_change_pct?.toFixed(2)}%
         </span>
       </div>
@@ -59,6 +59,200 @@ function PredictionCard({ pred, label }) {
         &nbsp;|&nbsp; R² = {pred.r_squared}
         &nbsp;|&nbsp; 趨勢: {pred.trend}
       </div>
+    </div>
+  )
+}
+
+// ── TW: 三大法人 panel ────────────────────────────────────────────────────────
+function InvestorsTW({ data }) {
+  const trend = data.trend || []
+  const foreignVals = trend.map(d => d.foreign_net)
+  const maxAbs = Math.max(...foreignVals.map(Math.abs), 1)
+
+  const fmt = v => {
+    if (v == null) return '—'
+    const abs = Math.abs(v)
+    const sign = v >= 0 ? '+' : '-'
+    if (abs >= 10000) return `${sign}${(abs / 10000).toFixed(1)}萬`
+    return `${sign}${abs.toLocaleString()}`
+  }
+
+  return (
+    <div className="space-y-3 pt-1">
+      {/* 三大法人最新數字 */}
+      <div className="grid grid-cols-3 gap-2">
+        {[
+          { label: '外資買賣超', val: data.foreign_net, color: '#40C4FF' },
+          { label: '投信買賣超', val: data.trust_net,   color: '#AB47BC' },
+          { label: '自營商買賣超', val: data.dealer_net, color: '#FFA726' },
+        ].map(({ label, val, color }) => (
+          <div key={label} className="bg-[#111] rounded p-2 text-center border border-[#1E1E1E]">
+            <div className="text-[9px] text-gray-600 mb-1">{label}</div>
+            <div className={`text-sm font-mono font-bold ${val >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>
+              {fmt(val)}
+            </div>
+            <div className="text-[9px] text-gray-700">張</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 外資買賣超趨勢小圖 */}
+      {trend.length > 1 && (
+        <div>
+          <div className="text-[9px] text-gray-600 mb-1">外資近{trend.length}日買賣超 (張)</div>
+          <div className="flex items-stretch gap-0.5 h-16 bg-[#0A0A0A] rounded p-1">
+            {trend.map((d, i) => {
+              const pct = Math.abs(d.foreign_net) / maxAbs
+              const isPos = d.foreign_net >= 0
+              return (
+                <div key={i} className="flex-1 flex flex-col items-center justify-center gap-0"
+                  title={`${d.date}: ${d.foreign_net?.toLocaleString()}張`}>
+                  <div className="w-full flex-1 flex items-end justify-center">
+                    {isPos && (
+                      <div className="w-full rounded-sm"
+                        style={{ height: `${pct * 100}%`, minHeight: 2, background: '#EF5350' }} />
+                    )}
+                  </div>
+                  <div className="w-full flex-1 flex items-start justify-center">
+                    {!isPos && (
+                      <div className="w-full rounded-sm"
+                        style={{ height: `${pct * 100}%`, minHeight: 2, background: '#26A69A' }} />
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex justify-between text-[8px] text-gray-700 mt-0.5">
+            <span>{trend[0]?.date?.slice(5)}</span>
+            <span>{trend[trend.length - 1]?.date?.slice(5)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* 三大法人合計 */}
+      <div className="flex items-center justify-between text-[10px] bg-[#111] rounded px-3 py-1.5 border border-[#1E1E1E]">
+        <span className="text-gray-500">三大法人合計買賣超</span>
+        <span className={`font-mono font-bold ${data.total_net >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>
+          {fmt(data.total_net)} 張
+        </span>
+        <span className="text-gray-700 text-[9px]">{data.latest_date}</span>
+      </div>
+    </div>
+  )
+}
+
+// ── US: Institutional breakdown panel ─────────────────────────────────────────
+function InvestorsUS({ data }) {
+  const insidersPct  = data.held_pct_insiders     != null ? (data.held_pct_insiders * 100).toFixed(1) : null
+  const instPct      = data.held_pct_institutions != null ? (data.held_pct_institutions * 100).toFixed(1) : null
+  const retailPct    = insidersPct && instPct
+    ? Math.max(0, 100 - parseFloat(insidersPct) - parseFloat(instPct)).toFixed(1)
+    : null
+
+  const barWidth = (pct) => pct != null ? `${Math.min(100, parseFloat(pct))}%` : '0%'
+
+  return (
+    <div className="space-y-3 pt-1">
+      {/* Stacked ownership bar */}
+      {(insidersPct || instPct) && (
+        <div>
+          <div className="text-[9px] text-gray-600 mb-1">持股結構</div>
+          <div className="flex h-3 rounded overflow-hidden gap-px">
+            {instPct && (
+              <div title={`機構 ${instPct}%`}
+                style={{ width: barWidth(instPct), background: '#40C4FF' }} />
+            )}
+            {insidersPct && (
+              <div title={`內部人 ${insidersPct}%`}
+                style={{ width: barWidth(insidersPct), background: '#FFA726' }} />
+            )}
+            {retailPct && (
+              <div title={`散戶 ${retailPct}%`}
+                style={{ flex: 1, background: '#2A2A2A' }} />
+            )}
+          </div>
+          <div className="flex gap-3 mt-1.5 text-[9px]">
+            {instPct && <span><span className="inline-block w-2 h-2 rounded-sm mr-1" style={{background:'#40C4FF'}} />機構 {instPct}%</span>}
+            {insidersPct && <span><span className="inline-block w-2 h-2 rounded-sm mr-1" style={{background:'#FFA726'}} />內部人 {insidersPct}%</span>}
+            {retailPct && <span><span className="inline-block w-2 h-2 rounded-sm mr-1" style={{background:'#2A2A2A', border:'1px solid #444'}} />散戶 ≈{retailPct}%</span>}
+          </div>
+        </div>
+      )}
+
+      {/* Top institutions */}
+      {data.top_institutions?.length > 0 && (
+        <div>
+          <div className="text-[9px] text-gray-600 mb-1">前{data.top_institutions.length}大機構持股</div>
+          <div className="space-y-px max-h-44 overflow-y-auto">
+            {data.top_institutions.map((inst, i) => (
+              <div key={i} className="flex items-center justify-between px-2 py-1 bg-[#111] rounded text-[10px]">
+                <span className="text-gray-400 truncate flex-1 mr-2">{inst.holder}</span>
+                <span className="text-[#40C4FF] font-mono flex-shrink-0">
+                  {inst.pct_out != null ? inst.pct_out + '%' : '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Major holders rows from yfinance */}
+      {!data.top_institutions?.length && data.major_holders_rows?.length > 0 && (
+        <div className="space-y-px">
+          {data.major_holders_rows.map((row, i) => (
+            <div key={i} className="flex justify-between text-[10px] px-2 py-0.5 bg-[#111] rounded">
+              <span className="text-gray-500">{row[1]}</span>
+              <span className="text-gray-200 font-mono">{row[0]}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Collapsible investors section ─────────────────────────────────────────────
+function InvestorsSection({ symbol }) {
+  const [data, setData]       = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [open, setOpen]       = useState(false)
+
+  const load = () => {
+    if (data || loading) return
+    setLoading(true)
+    api.getInvestors(symbol)
+      .then(setData)
+      .catch(() => setData({ error: '資料載入失敗' }))
+      .finally(() => setLoading(false))
+  }
+
+  const toggle = () => {
+    setOpen(o => !o)
+    if (!open) load()
+  }
+
+  return (
+    <div className="border border-[#1E1E1E] rounded overflow-hidden">
+      <button
+        onClick={toggle}
+        className="w-full flex items-center justify-between px-3 py-2 text-xs hover:bg-[#1A1A1A] transition-colors"
+      >
+        <span className="font-semibold text-gray-300">
+          {symbol?.endsWith('.TW') || symbol?.endsWith('.TWO')
+            ? '三大法人買賣超'
+            : '法人 / 散戶持股分析'}
+        </span>
+        <span className="text-[10px] text-gray-600">{open ? '▼' : '▶'}</span>
+      </button>
+      {open && (
+        <div className="px-3 pb-3 border-t border-[#1E1E1E]">
+          {loading && <div className="text-gray-600 text-[10px] py-3 text-center">載入中...</div>}
+          {data?.error && <div className="text-yellow-600 text-[10px] py-2">{data.error}</div>}
+          {data && !data.error && data.type === 'tw' && <InvestorsTW data={data} />}
+          {data && !data.error && data.type === 'us' && <InvestorsUS data={data} />}
+        </div>
+      )}
     </div>
   )
 }
@@ -95,7 +289,7 @@ function SingleAnalysis({ symbol, stockName }) {
         </div>
         <div className="flex items-baseline gap-3">
           <span className="text-2xl font-mono text-white">{data.price?.toLocaleString()}</span>
-          <span className={`text-base font-mono ${isUp ? 'text-[#26A69A]' : 'text-[#EF5350]'}`}>
+          <span className={`text-base font-mono ${isUp ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>
             {isUp ? '+' : ''}{data.daily_change_pct?.toFixed(2)}%
           </span>
         </div>
@@ -112,10 +306,10 @@ function SingleAnalysis({ symbol, stockName }) {
       {(data.support || data.resistance) && (
         <div className="flex gap-4 text-xs">
           {data.support && (
-            <span className="text-gray-400">支撐位: <span className="text-[#26A69A] font-mono">{data.support?.toLocaleString()}</span></span>
+            <span className="text-gray-400">支撐位: <span className="text-[#EF5350] font-mono">{data.support?.toLocaleString()}</span></span>
           )}
           {data.resistance && (
-            <span className="text-gray-400">壓力位: <span className="text-[#EF5350] font-mono">{data.resistance?.toLocaleString()}</span></span>
+            <span className="text-gray-400">壓力位: <span className="text-[#26A69A] font-mono">{data.resistance?.toLocaleString()}</span></span>
           )}
         </div>
       )}
@@ -137,6 +331,9 @@ function SingleAnalysis({ symbol, stockName }) {
         <PredictionCard pred={data.prediction_5d} label="5日預測" />
         <PredictionCard pred={data.prediction_20d} label="20日預測" />
       </div>
+
+      {/* Investor / institutional data */}
+      <InvestorsSection symbol={symbol} />
 
       <div className="text-[10px] text-gray-700 pt-2">
         ⚠ 以上分析基於技術指標數學模型，不構成投資建議。投資有風險，請自行判斷。
@@ -179,8 +376,8 @@ function DailyReport() {
           <div className="text-xs text-gray-500">{report.date} | 生成: {report.generated_at}</div>
         </div>
         <div className={`px-3 py-1 rounded text-sm font-semibold ${
-          report.market_sentiment === '多頭' ? 'bg-[#0A2A0A] text-[#26A69A]' :
-          report.market_sentiment === '空頭' ? 'bg-[#2A0A0A] text-[#EF5350]' :
+          report.market_sentiment === '多頭' ? 'bg-[#2A0A0A] text-[#EF5350]' :
+          report.market_sentiment === '空頭' ? 'bg-[#0A2A0A] text-[#26A69A]' :
           'bg-[#1A1A0A] text-[#FFA726]'
         }`}>
           市場情緒: {report.market_sentiment}
@@ -190,7 +387,7 @@ function DailyReport() {
       {/* Top Opportunities */}
       {report.top_opportunities?.length > 0 && (
         <div>
-          <div className="text-sm font-semibold text-[#26A69A] mb-2">買入機會 TOP 5</div>
+          <div className="text-sm font-semibold text-[#EF5350] mb-2">買入機會 TOP 5</div>
           <div className="space-y-1">
             {report.top_opportunities.map((s, i) => (
               <div key={s.symbol} className="flex items-center justify-between bg-[#0A1A0A] rounded px-3 py-1.5">
@@ -209,7 +406,7 @@ function DailyReport() {
       {/* Top Risks */}
       {report.top_risks?.length > 0 && (
         <div>
-          <div className="text-sm font-semibold text-[#EF5350] mb-2">風險警示 TOP 5</div>
+          <div className="text-sm font-semibold text-[#26A69A] mb-2">風險警示 TOP 5</div>
           <div className="space-y-1">
             {report.top_risks.map((s, i) => (
               <div key={s.symbol} className="flex items-center justify-between bg-[#1A0A0A] rounded px-3 py-1.5">
@@ -233,8 +430,8 @@ function DailyReport() {
             <div key={sector} className="bg-[#141414] rounded px-2 py-1.5 flex items-center justify-between">
               <span className="text-[10px] text-gray-400 truncate">{sector}</span>
               <span className={`text-[10px] font-semibold ml-2 flex-shrink-0 ${
-                info.sentiment === '多頭' ? 'text-[#26A69A]' :
-                info.sentiment === '空頭' ? 'text-[#EF5350]' : 'text-[#FFA726]'
+                info.sentiment === '多頭' ? 'text-[#EF5350]' :
+                info.sentiment === '空頭' ? 'text-[#26A69A]' : 'text-[#FFA726]'
               }`}>
                 {info.sentiment} ({info.avg_score > 0 ? '+' : ''}{info.avg_score})
               </span>
@@ -255,7 +452,7 @@ function DailyReport() {
                   <span className="text-[10px] text-gray-600 w-20">{r.symbol}</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className={`text-[10px] ${r.daily_change_pct >= 0 ? 'text-[#26A69A]' : 'text-[#EF5350]'}`}>
+                  <span className={`text-[10px] ${r.daily_change_pct >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>
                     {r.daily_change_pct >= 0 ? '+' : ''}{r.daily_change_pct?.toFixed(2)}%
                   </span>
                   <span className={`text-[10px] font-semibold rating-${r.rating_key}`}>{r.rating}</span>

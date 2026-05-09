@@ -3,7 +3,7 @@ import { api } from '../api/stocks.js'
 
 function IndexCard({ item }) {
   const isUp = item.change_pct >= 0
-  const color = isUp ? 'text-[#26A69A]' : 'text-[#EF5350]'
+  const color = isUp ? 'text-[#EF5350]' : 'text-[#26A69A]'
   const arrow = isUp ? '▲' : '▼'
   return (
     <div className="flex flex-col px-3 py-1.5 border-r border-[#2A2A2A] last:border-r-0 min-w-0">

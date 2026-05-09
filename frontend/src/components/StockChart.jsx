@@ -77,9 +77,9 @@ export default function StockChart({ symbol, stockName, interval }) {
 
     // Candlestick
     const candle = main.addCandlestickSeries({
-      upColor: '#26A69A', downColor: '#EF5350',
-      borderUpColor: '#26A69A', borderDownColor: '#EF5350',
-      wickUpColor: '#26A69A', wickDownColor: '#EF5350',
+      upColor: '#EF5350', downColor: '#26A69A',
+      borderUpColor: '#EF5350', borderDownColor: '#26A69A',
+      wickUpColor: '#EF5350', wickDownColor: '#26A69A',
     })
 
     // MA lines
@@ -169,7 +169,7 @@ export default function StockChart({ symbol, stockName, interval }) {
       volume.setData(data.data.map(d => ({
         time: d.time,
         value: d.volume,
-        color: d.close >= d.open ? '#26A69A55' : '#EF535055',
+        color: d.close >= d.open ? '#EF535055' : '#26A69A55',
       })))
 
       for (const key of Object.keys(MA_STYLES)) {
@@ -233,9 +233,9 @@ export default function StockChart({ symbol, stockName, interval }) {
         {ohlcInfo && (
           <div className="flex gap-2 text-[10px] font-mono ml-2">
             <span className="text-gray-500">O <span className="text-white">{ohlcInfo.open?.toFixed(2)}</span></span>
-            <span className="text-gray-500">H <span className="text-[#26A69A]">{ohlcInfo.high?.toFixed(2)}</span></span>
-            <span className="text-gray-500">L <span className="text-[#EF5350]">{ohlcInfo.low?.toFixed(2)}</span></span>
-            <span className="text-gray-500">C <span className={ohlcInfo.close >= ohlcInfo.open ? 'text-[#26A69A]' : 'text-[#EF5350]'}>{ohlcInfo.close?.toFixed(2)}</span></span>
+            <span className="text-gray-500">H <span className="text-[#EF5350]">{ohlcInfo.high?.toFixed(2)}</span></span>
+            <span className="text-gray-500">L <span className="text-[#26A69A]">{ohlcInfo.low?.toFixed(2)}</span></span>
+            <span className="text-gray-500">C <span className={ohlcInfo.close >= ohlcInfo.open ? 'text-[#EF5350]' : 'text-[#26A69A]'}>{ohlcInfo.close?.toFixed(2)}</span></span>
           </div>
         )}
 
