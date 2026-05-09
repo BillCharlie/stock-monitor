@@ -1,0 +1,324 @@
+"""
+Stock Monitor Backend — FastAPI
+Single port: serves both API (/api/*) and React static build (/)
+Run: uvicorn main:app --reload --port 8765
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+from contextlib import asynccontextmanager
+from typing import Optional
+
+from apscheduler.schedulers.background import BackgroundScheduler
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from analysis import analyze_stock, generate_daily_report
+from email_sender import send_daily_report
+from gpt_analysis import generate_gpt_report
+from pdf_generator import latest_report_path, save_report_pdf
+from indicators import (
+    calculate_bollinger_bands,
+    calculate_kd,
+    calculate_ma,
+    calculate_rsi,
+    series_to_list,
+)
+from stock_data import df_to_ohlcv_list, get_ohlcv, get_quote
+from watchlist import MARKET_INDICES, WATCHLIST
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+CUSTOM_STOCKS_FILE = os.path.join(os.path.dirname(__file__), "custom_stocks.json")
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+# ─── In-memory caches ─────────────────────────────────────────────────────────
+_daily_report: dict = {}
+_stock_analyses: dict = {}
+
+
+def load_custom_stocks() -> list:
+    if not os.path.exists(CUSTOM_STOCKS_FILE):
+        return []
+    try:
+        with open(CUSTOM_STOCKS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f).get("stocks", [])
+    except Exception:
+        return []
+
+
+def save_custom_stocks(stocks: list) -> None:
+    with open(CUSTOM_STOCKS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"stocks": stocks}, f, ensure_ascii=False, indent=2)
+
+
+# ─── Cached GPT report ────────────────────────────────────────────────────────
+_gpt_report_html: str = ""
+
+
+def _run_daily_analysis():
+    logger.info("Running scheduled daily analysis...")
+    global _daily_report, _stock_analyses
+    full_wl = dict(WATCHLIST)
+    custom = load_custom_stocks()
+    if custom:
+        full_wl["自訂觀察清單"] = {"自訂": custom}
+    report = generate_daily_report(full_wl)
+    _daily_report = report
+    _stock_analyses = report.get("all_results", {})
+    logger.info(f"Daily analysis complete: {len(_stock_analyses)} stocks")
+
+
+def _generate_and_deliver(trigger: str = "scheduler"):
+    """Shared logic: GPT report → save PDF → send email with attachment."""
+    global _gpt_report_html
+    logger.info(f"Generating report (trigger={trigger})...")
+
+    html = generate_gpt_report(
+        _stock_analyses,
+        market_sentiment=_daily_report.get("market_sentiment", "中性"),
+    )
+    if html:
+        _gpt_report_html = html
+        logger.info("GPT report generated successfully")
+    else:
+        from email_sender import _build_fallback_html
+        html = _build_fallback_html(_daily_report)
+        _gpt_report_html = html
+        logger.info("Using fallback HTML report (GPT not available)")
+
+    pdf_path = save_report_pdf(html, _daily_report)
+    send_daily_report(html, _daily_report, pdf_path=pdf_path)
+
+
+def _run_morning_email():
+    """7 AM scheduled job: run full analysis → generate report → PDF → email."""
+    logger.info("Running 7 AM morning report job...")
+    _run_daily_analysis()
+    _generate_and_deliver(trigger="scheduler")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    report_hour   = int(os.getenv("REPORT_HOUR", "7"))
+    report_minute = int(os.getenv("REPORT_MINUTE", "0"))
+
+    scheduler = BackgroundScheduler(timezone="Asia/Taipei")
+    # Taiwan close: Mon–Fri 13:40
+    scheduler.add_job(_run_daily_analysis, "cron", day_of_week="mon-fri", hour=13, minute=40)
+    # US close: Tue–Sat 05:10 (Taiwan time)
+    scheduler.add_job(_run_daily_analysis, "cron", day_of_week="tue-sat", hour=5, minute=10)
+    # Morning email: every day at configured time (default 07:00 Taiwan)
+    scheduler.add_job(_run_morning_email, "cron",
+                      day_of_week="mon-fri", hour=report_hour, minute=report_minute,
+                      id="morning_email")
+    scheduler.start()
+    logger.info(f"Scheduler started — morning email at {report_hour:02d}:{report_minute:02d} (Asia/Taipei)")
+    yield
+    scheduler.shutdown()
+
+
+app = FastAPI(title="Stock Monitor API", version="2.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ─── Watchlist ────────────────────────────────────────────────────────────────
+
+@app.get("/api/watchlist")
+def get_watchlist():
+    cats = dict(WATCHLIST)
+    custom = load_custom_stocks()
+    if custom:
+        cats["自訂觀察清單"] = {"自訂": custom}
+    return {"categories": cats}
+
+
+# ─── Custom stocks ────────────────────────────────────────────────────────────
+
+class StockItem(BaseModel):
+    symbol: str
+    name: str
+
+@app.get("/api/custom-stocks")
+def get_custom_stocks():
+    return {"stocks": load_custom_stocks()}
+
+@app.post("/api/custom-stocks")
+def add_custom_stock(item: StockItem):
+    stocks = load_custom_stocks()
+    symbol = item.symbol.strip().upper()
+    if any(s["symbol"] == symbol for s in stocks):
+        raise HTTPException(status_code=400, detail="股票代號已存在")
+    stocks.append({"symbol": symbol, "name": item.name.strip() or symbol})
+    save_custom_stocks(stocks)
+    return {"status": "ok", "stocks": stocks}
+
+@app.delete("/api/custom-stocks/{symbol}")
+def delete_custom_stock(symbol: str):
+    stocks = load_custom_stocks()
+    original_len = len(stocks)
+    stocks = [s for s in stocks if s["symbol"] != symbol.upper()]
+    if len(stocks) == original_len:
+        raise HTTPException(status_code=404, detail="找不到該股票")
+    save_custom_stocks(stocks)
+    return {"status": "ok", "stocks": stocks}
+
+
+# ─── K-line data + indicators ─────────────────────────────────────────────────
+
+@app.get("/api/stocks/{symbol}/kline")
+def get_kline(
+    symbol: str,
+    interval: str = Query("1d", pattern="^(1d|1wk|1mo)$"),
+    refresh: bool = Query(False),
+):
+    df = get_ohlcv(symbol, interval=interval, force_refresh=refresh)
+    if df.empty:
+        raise HTTPException(status_code=404, detail=f"No data for {symbol}")
+
+    mas = calculate_ma(df, [5, 10, 20, 60, 120, 240])
+    bb = calculate_bollinger_bands(df)
+    rsi_s = calculate_rsi(df)
+    kd = calculate_kd(df)
+
+    dates = df.index
+    return {
+        "symbol": symbol,
+        "interval": interval,
+        "data": df_to_ohlcv_list(df),
+        "indicators": {
+            "MA5":       series_to_list(mas["MA5"], dates),
+            "MA10":      series_to_list(mas["MA10"], dates),
+            "MA20":      series_to_list(mas["MA20"], dates),
+            "MA60":      series_to_list(mas["MA60"], dates),
+            "MA120":     series_to_list(mas["MA120"], dates),
+            "MA240":     series_to_list(mas["MA240"], dates),
+            "BB_upper":  series_to_list(bb["BB_upper"], dates),
+            "BB_middle": series_to_list(bb["BB_middle"], dates),
+            "BB_lower":  series_to_list(bb["BB_lower"], dates),
+            "RSI":       series_to_list(rsi_s, dates),
+            "K":         series_to_list(kd["K"], dates),
+            "D":         series_to_list(kd["D"], dates),
+        },
+    }
+
+
+# ─── Quote ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/stocks/{symbol}/quote")
+def get_stock_quote(symbol: str):
+    return get_quote(symbol)
+
+
+# ─── Analysis ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/stocks/{symbol}/analysis")
+def get_stock_analysis(symbol: str, name: Optional[str] = ""):
+    if symbol in _stock_analyses:
+        return _stock_analyses[symbol]
+    result = analyze_stock(symbol, name or "")
+    _stock_analyses[symbol] = result
+    return result
+
+
+# ─── Market overview ──────────────────────────────────────────────────────────
+
+@app.get("/api/market/overview")
+def get_market_overview():
+    results = []
+    for idx in MARKET_INDICES:
+        q = get_quote(idx["symbol"])
+        results.append({"symbol": idx["symbol"], "name": idx["name"], "name_en": idx["name_en"], **q})
+    return {"indices": results}
+
+
+# ─── Daily report ─────────────────────────────────────────────────────────────
+
+@app.get("/api/analysis/daily-report")
+def get_daily_report():
+    if not _daily_report:
+        raise HTTPException(status_code=404, detail="尚無分析報告，請先觸發生成")
+    return _daily_report
+
+
+@app.post("/api/analysis/generate")
+def trigger_analysis():
+    _run_daily_analysis()
+    return {"status": "ok", "message": f"已分析 {len(_stock_analyses)} 支股票"}
+
+
+@app.post("/api/analysis/gpt-report")
+def trigger_gpt_report():
+    """Manually trigger GPT report → save PDF locally → send email with PDF attachment."""
+    if not _daily_report:
+        _run_daily_analysis()
+
+    html = generate_gpt_report(
+        _stock_analyses,
+        market_sentiment=_daily_report.get("market_sentiment", "中性"),
+    )
+    status = "ok"
+    if not html:
+        from email_sender import _build_fallback_html
+        html = _build_fallback_html(_daily_report)
+        status = "fallback"
+
+    global _gpt_report_html
+    _gpt_report_html = html
+
+    pdf_path = save_report_pdf(html, _daily_report)
+    ok = send_daily_report(html, _daily_report, pdf_path=pdf_path)
+
+    return {
+        "status": status,
+        "email_sent": ok,
+        "pdf_saved": pdf_path,
+        "html_length": len(html),
+    }
+
+
+@app.get("/api/analysis/gpt-report")
+def get_gpt_report():
+    if not _gpt_report_html:
+        raise HTTPException(status_code=404, detail="尚無GPT報告，請先觸發生成")
+    return {"html": _gpt_report_html}
+
+
+@app.get("/api/health")
+def health():
+    return {"status": "ok", "stocks_analyzed": len(_stock_analyses), "port": 8765}
+
+
+# ─── PDF report download ──────────────────────────────────────────────────────
+
+@app.get("/api/analysis/download-report")
+def download_latest_pdf():
+    path = latest_report_path()
+    if not path:
+        raise HTTPException(status_code=404, detail="尚無PDF報告，請先觸發生成")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=os.path.basename(path),
+    )
+
+
+# ─── Serve React SPA (MUST be last) ──────────────────────────────────────────
+os.makedirs(STATIC_DIR, exist_ok=True)
+if os.path.exists(os.path.join(STATIC_DIR, "index.html")):
+    app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+else:
+    logger.warning("Static build not found. Run: cd frontend && npm run build")

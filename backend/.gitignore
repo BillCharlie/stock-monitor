@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+cache/
+static/
+venv/
+custom_stocks.json

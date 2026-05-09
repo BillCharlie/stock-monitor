@@ -1,0 +1,30 @@
+# ── Python backend ────────────────────────────────────────────
+backend/.env
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/*.pyo
+backend/reports/
+backend/custom_stocks.json
+backend/stock_cache/
+backend/data/
+
+# ── Built frontend (local dev build → backend/static) ─────────
+backend/static/
+
+# ── Node / frontend ───────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# ── Cloudflare Tunnel binary ──────────────────────────────────
+backend/cloudflared.exe
+
+# ── OS / editor ───────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/settings.json
+*.log
