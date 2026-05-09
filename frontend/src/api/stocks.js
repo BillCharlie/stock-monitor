@@ -4,6 +4,17 @@ const BASE = import.meta.env.VITE_API_BASE_URL
   ? import.meta.env.VITE_API_BASE_URL.replace(/\/$/, '') + '/api'
   : '/api'
 
+// Secret for write endpoints — set VITE_API_SECRET in GitHub Secrets
+const API_SECRET = import.meta.env.VITE_API_SECRET || ''
+
+function writeHeaders(extra = {}) {
+  return {
+    'Content-Type': 'application/json',
+    ...(API_SECRET ? { 'X-API-Secret': API_SECRET } : {}),
+    ...extra,
+  }
+}
+
 async function request(path, options) {
   const res = await fetch(BASE + path, options)
   if (!res.ok) {
@@ -28,9 +39,9 @@ export const api = {
 
   getDailyReport: () => request('/analysis/daily-report'),
 
-  generateReport: () => request('/analysis/generate', { method: 'POST' }),
+  generateReport: () => request('/analysis/generate', { method: 'POST', headers: writeHeaders() }),
 
-  triggerGptReport: () => request('/analysis/gpt-report', { method: 'POST' }),
+  triggerGptReport: () => request('/analysis/gpt-report', { method: 'POST', headers: writeHeaders() }),
 
   downloadPdfUrl: () => `${BASE}/analysis/download-report`,
 
@@ -40,10 +51,13 @@ export const api = {
   addCustomStock: (symbol, name) =>
     request('/custom-stocks', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: writeHeaders(),
       body: JSON.stringify({ symbol, name }),
     }),
 
   deleteCustomStock: (symbol) =>
-    request(`/custom-stocks/${encodeURIComponent(symbol)}`, { method: 'DELETE' }),
+    request(`/custom-stocks/${encodeURIComponent(symbol)}`, {
+      method: 'DELETE',
+      headers: writeHeaders(),
+    }),
 }

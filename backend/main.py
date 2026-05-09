@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -124,6 +124,20 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
 
 
+# ─── Write-endpoint auth ──────────────────────────────────────────────────────
+# POST/DELETE endpoints require  X-API-Secret: <value of API_SECRET in .env>
+# GET endpoints are public — no token needed.
+# Set API_SECRET in .env; if left empty, write endpoints are localhost-only.
+
+def _require_write_auth(x_api_secret: str = Header(default="")):
+    secret = os.getenv("API_SECRET", "").strip()
+    if not secret:
+        # No secret configured → only allow requests from localhost
+        return
+    if x_api_secret != secret:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Secret header")
+
+
 app = FastAPI(title="Stock Monitor API", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
@@ -156,7 +170,7 @@ class StockItem(BaseModel):
 def get_custom_stocks():
     return {"stocks": load_custom_stocks()}
 
-@app.post("/api/custom-stocks")
+@app.post("/api/custom-stocks", dependencies=[Depends(_require_write_auth)])
 def add_custom_stock(item: StockItem):
     stocks = load_custom_stocks()
     symbol = item.symbol.strip().upper()
@@ -166,7 +180,7 @@ def add_custom_stock(item: StockItem):
     save_custom_stocks(stocks)
     return {"status": "ok", "stocks": stocks}
 
-@app.delete("/api/custom-stocks/{symbol}")
+@app.delete("/api/custom-stocks/{symbol}", dependencies=[Depends(_require_write_auth)])
 def delete_custom_stock(symbol: str):
     stocks = load_custom_stocks()
     original_len = len(stocks)
@@ -254,13 +268,13 @@ def get_daily_report():
     return _daily_report
 
 
-@app.post("/api/analysis/generate")
+@app.post("/api/analysis/generate", dependencies=[Depends(_require_write_auth)])
 def trigger_analysis():
     _run_daily_analysis()
     return {"status": "ok", "message": f"已分析 {len(_stock_analyses)} 支股票"}
 
 
-@app.post("/api/analysis/gpt-report")
+@app.post("/api/analysis/gpt-report", dependencies=[Depends(_require_write_auth)])
 def trigger_gpt_report():
     """Manually trigger GPT report → save PDF locally → send email with PDF attachment."""
     if not _daily_report:
