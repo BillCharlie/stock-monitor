@@ -102,7 +102,7 @@ export default function AccessKeyPanel({ onClose }) {
         <p className="text-gray-500 text-xs mb-5">密鑰儲存於瀏覽器本地，不會上傳。登入成功將通知管理員。</p>
 
         <KeyRow
-          label="報告生成密鑰"
+          label="報告生成和新聞刷新密鑰"
           hint="用於「生成每日報告」與「新聞重新整理」"
           value={reportKey}
           onChange={setReportKey}
