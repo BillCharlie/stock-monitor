@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import MarketOverview from './components/MarketOverview.jsx'
 import WatchlistPanel from './components/WatchlistPanel.jsx'
 import StockChart from './components/StockChart.jsx'
@@ -15,6 +15,37 @@ export default function App() {
   const [reportMsg, setReportMsg] = useState('')
   const [hasPdf, setHasPdf] = useState(false)
   const [showKeys, setShowKeys] = useState(false)
+  const [sidebarW, setSidebarW] = useState(224)
+  const resizingRef = useRef(false)
+  const resizeStartXRef = useRef(0)
+  const resizeStartWRef = useRef(0)
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!resizingRef.current) return
+      const delta = e.clientX - resizeStartXRef.current
+      setSidebarW(Math.max(160, Math.min(480, resizeStartWRef.current + delta)))
+    }
+    const onUp = () => {
+      if (resizingRef.current) {
+        document.body.style.userSelect = ''
+        document.body.style.cursor = ''
+      }
+      resizingRef.current = false
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+  }, [])
+
+  const handleResizeMouseDown = (e) => {
+    e.preventDefault()
+    resizingRef.current = true
+    resizeStartXRef.current = e.clientX
+    resizeStartWRef.current = sidebarW
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+  }
 
   // Show key indicator: lock icon is green if both keys are set, yellow if partial, gray if none
   const hasReportKey = keys.hasReport()
@@ -54,7 +85,7 @@ export default function App() {
       <MarketOverview />
 
       <div className="flex flex-1 min-h-0">
-        <div className="w-56 flex-shrink-0 border-r border-[#2A2A2A] overflow-y-auto">
+        <div style={{ width: sidebarW }} className="relative flex-shrink-0 border-r border-[#2A2A2A]">
           <WatchlistPanel
             onSelect={(symbol, name) => {
               setSelected({ symbol, name })
@@ -62,6 +93,10 @@ export default function App() {
             }}
             selectedSymbol={selected.symbol}
             onNeedKey={() => setShowKeys(true)}
+          />
+          <div
+            className="absolute right-0 top-0 w-1.5 h-full cursor-col-resize hover:bg-blue-500/20 active:bg-blue-500/40 z-10"
+            onMouseDown={handleResizeMouseDown}
           />
         </div>
 
