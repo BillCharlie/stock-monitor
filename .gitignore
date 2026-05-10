@@ -7,7 +7,9 @@ backend/*.pyc
 backend/*.pyo
 backend/reports/
 backend/custom_stocks.json
+backend/user_watchlist.json
 backend/stock_cache/
+backend/cache/
 backend/data/
 
 # ── Built frontend (local dev build → backend/static) ─────────

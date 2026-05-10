@@ -16,7 +16,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
+CACHE_DIR = os.path.join(os.getenv("DATA_DIR", os.path.dirname(__file__)), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 NEWS_CACHE_TTL = 4 * 3600  # 4 hours

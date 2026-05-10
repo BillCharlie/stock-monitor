@@ -5,13 +5,14 @@ Strips dark-mode styles and renders a clean light-mode PDF.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-REPORTS_DIR = Path(__file__).parent / "reports"
+REPORTS_DIR = Path(os.getenv("DATA_DIR", str(Path(__file__).parent))) / "reports"
 
 # ─── HTML → clean text helpers ───────────────────────────────────────────────
 

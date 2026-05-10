@@ -38,9 +38,13 @@ from watchlist import MARKET_INDICES, WATCHLIST
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-CUSTOM_STOCKS_FILE    = os.path.join(os.path.dirname(__file__), "custom_stocks.json")
-USER_WATCHLIST_FILE   = os.path.join(os.path.dirname(__file__), "user_watchlist.json")
-STATIC_DIR            = os.path.join(os.path.dirname(__file__), "static")
+_BASE_DIR             = os.path.dirname(__file__)
+_DATA_DIR             = os.getenv("DATA_DIR", _BASE_DIR)
+os.makedirs(_DATA_DIR, exist_ok=True)
+
+CUSTOM_STOCKS_FILE    = os.path.join(_DATA_DIR, "custom_stocks.json")
+USER_WATCHLIST_FILE   = os.path.join(_DATA_DIR, "user_watchlist.json")
+STATIC_DIR            = os.path.join(_BASE_DIR, "static")
 
 # ─── In-memory caches ─────────────────────────────────────────────────────────
 _daily_report: dict = {}
