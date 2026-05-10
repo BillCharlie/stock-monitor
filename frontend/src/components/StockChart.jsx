@@ -77,6 +77,7 @@ export default function StockChart({ symbol, stockName, interval }) {
     { MA5: true, MA10: true, MA20: true, MA60: true, MA120: false, MA240: false }
   )
   const [showBB, setShowBB] = useState(true)
+  const [showOBV, setShowOBV] = useState(true)
   const [ohlcInfo, setOhlcInfo] = useState(null)
 
   // ── Initialize charts (once) ──────────────────────────────────────────────
@@ -121,6 +122,16 @@ export default function StockChart({ symbol, stockName, interval }) {
       scaleMargins: { top: 0.1, bottom: 0 },
     })
 
+    // OBV — overlaid on the volume chart using its own left scale
+    vol.applyOptions({ leftPriceScale: { visible: false, borderColor: BORDER_COLOR } })
+    const obvLine = vol.addLineSeries({
+      color: '#7986CB',
+      lineWidth: 1,
+      priceScaleId: 'left',
+      lastValueVisible: false,
+      priceLineVisible: false,
+    })
+
     // RSI
     const rsiLine = rsi.addLineSeries({ color: '#FF9800', lineWidth: 1, lastValueVisible: true, priceLineVisible: false })
     const rsi70   = rsi.addLineSeries({ color: '#EF5350', lineWidth: 1, lineStyle: LineStyle.Dashed, lastValueVisible: false, priceLineVisible: false })
@@ -159,7 +170,7 @@ export default function StockChart({ symbol, stockName, interval }) {
     ro.observe(mainRef.current)
 
     chartsRef.current = { main, vol, rsi, kd }
-    seriesRef.current = { candle, maSeries, bbUpper, bbMiddle, bbLower, volume, rsiLine, rsi70, rsi30, kLine, dLine, kd80, kd20 }
+    seriesRef.current = { candle, maSeries, bbUpper, bbMiddle, bbLower, volume, obvLine, rsiLine, rsi70, rsi30, kLine, dLine, kd80, kd20 }
 
     return () => {
       ro.disconnect()
@@ -174,7 +185,7 @@ export default function StockChart({ symbol, stockName, interval }) {
     setError(null)
     try {
       const data = await api.getKline(symbol, interval)
-      const { candle, maSeries, bbUpper, bbMiddle, bbLower, volume, rsiLine, rsi70, rsi30, kLine, dLine, kd80, kd20 } = seriesRef.current
+      const { candle, maSeries, bbUpper, bbMiddle, bbLower, volume, obvLine, rsiLine, rsi70, rsi30, kLine, dLine, kd80, kd20 } = seriesRef.current
 
       candle.setData(data.data.map(d => ({
         time: d.time, open: d.open, high: d.high, low: d.low, close: d.close,
@@ -193,6 +204,8 @@ export default function StockChart({ symbol, stockName, interval }) {
       bbUpper.setData(data.indicators.BB_upper || [])
       bbMiddle.setData(data.indicators.BB_middle || [])
       bbLower.setData(data.indicators.BB_lower || [])
+
+      obvLine.setData(data.indicators.OBV || [])
 
       const rsiData = data.indicators.RSI || []
       rsiLine.setData(rsiData)
@@ -236,6 +249,12 @@ export default function StockChart({ symbol, stockName, interval }) {
     bbLower.applyOptions({ visible: showBB })
   }, [showBB])
 
+  useEffect(() => {
+    if (!seriesRef.current || !chartsRef.current) return
+    seriesRef.current.obvLine.applyOptions({ visible: showOBV })
+    chartsRef.current.vol.applyOptions({ leftPriceScale: { visible: showOBV } })
+  }, [showOBV])
+
   const toggleMA = (key) => setVisibleMAs(v => ({ ...v, [key]: !v[key] }))
 
   return (
@@ -276,6 +295,12 @@ export default function StockChart({ symbol, stockName, interval }) {
             BB
           </button>
           <button
+            onClick={() => setShowOBV(v => !v)}
+            className={`px-1.5 py-0.5 rounded text-[10px] border border-[#7986CB] text-[#7986CB] transition-opacity ${showOBV ? 'opacity-100' : 'opacity-30'}`}
+          >
+            OBV
+          </button>
+          <button
             onClick={() => loadData()}
             className="px-2 py-0.5 rounded text-[10px] border border-[#2A2A2A] text-gray-400 hover:text-white ml-1"
             title="重新整理"
@@ -298,8 +323,9 @@ export default function StockChart({ symbol, stockName, interval }) {
       <div className="flex-1 flex flex-col min-h-0 relative overflow-y-auto">
         <div ref={mainRef} className="w-full flex-shrink-0" style={{ height: 380 }} />
 
-        <div className="px-3 pt-1 flex-shrink-0">
+        <div className="px-3 pt-1 flex-shrink-0 flex items-center gap-2">
           <span className="text-[10px] text-gray-600">成交量</span>
+          {showOBV && <span className="text-[10px] text-[#7986CB]">── OBV</span>}
         </div>
         <div ref={volRef} className="w-full flex-shrink-0" style={{ height: 75 }} />
 

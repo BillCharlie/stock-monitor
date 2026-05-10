@@ -85,6 +85,7 @@ def analyze_stock(symbol: str, name: str = "", interval: str = "1d") -> dict:
     bb = calculate_bollinger_bands(df)
     rsi_s = calculate_rsi(df)
     kd = calculate_kd(df)
+    obv_s = calculate_obv(df)
 
     signals: list[dict] = []
     score = 0.0
@@ -254,6 +255,26 @@ def analyze_stock(symbol: str, name: str = "", interval: str = "1d") -> dict:
             score += 0.5 if is_up_day else -0.5
         elif vol_ratio < 0.5:
             signals.append({"indicator": "Volume", "signal": f"縮量 ({vol_ratio:.1f}倍均量) 市場觀望", "type": "neutral"})
+
+    # ── OBV signals ───────────────────────────────────────────────────────
+    window = min(10, len(obv_s))
+    if window >= 5 and not obv_s.iloc[-window:].isna().any():
+        obv_arr = obv_s.iloc[-window:].values.astype(float)
+        price_arr = df["Close"].iloc[-window:].values.astype(float)
+        obv_slope   = np.polyfit(range(window), obv_arr, 1)[0]
+        price_slope = np.polyfit(range(window), price_arr, 1)[0]
+        if price_slope > 0 and obv_slope < 0:
+            signals.append({"indicator": "OBV", "signal": "OBV頂背離：股價上漲但OBV下降，量能背離警告", "type": "bearish"})
+            score -= 1.5
+        elif price_slope < 0 and obv_slope > 0:
+            signals.append({"indicator": "OBV", "signal": "OBV底背離：股價下跌但OBV上升，潛在量能支撐", "type": "bullish"})
+            score += 1.5
+        elif obv_slope > 0 and price_slope > 0:
+            signals.append({"indicator": "OBV", "signal": "OBV同步上揚，量能確認多頭趨勢", "type": "bullish"})
+            score += 0.5
+        elif obv_slope < 0 and price_slope < 0:
+            signals.append({"indicator": "OBV", "signal": "OBV同步下降，量能確認空頭趨勢", "type": "bearish"})
+            score -= 0.5
 
     # ── Linear regression prediction ──────────────────────────────────────
     prediction_5d = None

@@ -28,6 +28,7 @@ from indicators import (
     calculate_bollinger_bands,
     calculate_kd,
     calculate_ma,
+    calculate_obv,
     calculate_rsi,
     series_to_list,
 )
@@ -339,6 +340,7 @@ def get_kline(
     bb = calculate_bollinger_bands(df)
     rsi_s = calculate_rsi(df)
     kd = calculate_kd(df)
+    obv_s = calculate_obv(df)
 
     dates = df.index
     return {
@@ -358,6 +360,7 @@ def get_kline(
             "RSI":       series_to_list(rsi_s, dates),
             "K":         series_to_list(kd["K"], dates),
             "D":         series_to_list(kd["D"], dates),
+            "OBV":       series_to_list(obv_s, dates),
         },
     }
 
