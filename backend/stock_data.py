@@ -119,25 +119,28 @@ def _get_tw_stock_from_tradingview(symbol: str, max_retries: int = 3) -> pd.Data
 
 def _get_tw_stock_from_twse_api(symbol: str, days: int = 250) -> pd.DataFrame:
     """
-    Fallback: Fetch Taiwan stock data directly from TWSE (Taiwan Stock Exchange).
-    Fetches recent data more efficiently.
+    Fetch Taiwan stock data directly from TWSE (Taiwan Stock Exchange).
+    TWSE API returns: [日期, 成交股數, 成交金額, 開盤價, 最高價, 最低價, 收盤價, 漲跌價差, 成交筆數, 註記]
+    Index: 0=date, 1=volume, 2=value, 3=open, 4=high, 5=low, 6=close, 7=change, 8=txn_count
+    Date format: 民國紀年 (e.g., 115/05/04 = 2026/05/04)
     """
-    if not symbol.endswith(".TW"):
+    if not symbol.upper().endswith(".TW"):
         return pd.DataFrame()
     
-    stock_code = symbol[:-3]
+    stock_code = symbol[:symbol.find(".")]  # Remove .TW suffix
     records = []
     
     try:
-        # Only fetch recent data (last N days) to speed up
-        end_date = datetime.now()
-        current_date = end_date
-        
+        # Start from recent dates and work backwards
+        current_date = datetime.now()
         request_count = 0
-        max_requests = 250  # Limit requests to avoid rate limiting
+        max_requests = 300  # Limit requests
+        days_checked = 0
+        max_days_to_check = 500  # Check up to 500 calendar days back
         
-        while len(records) < days and request_count < max_requests:
+        while len(records) < days and request_count < max_requests and days_checked < max_days_to_check:
             date_str = current_date.strftime("%Y%m%d")
+            days_checked += 1
             
             try:
                 url = "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
@@ -150,23 +153,42 @@ def _get_tw_stock_from_twse_api(symbol: str, days: int = 250) -> pd.DataFrame:
                 request_count += 1
                 
                 if resp.status_code == 200:
-                    data = resp.json()
-                    if "data" in data and data["data"]:
-                        for row in data["data"]:
-                            try:
-                                # TWSE format: [date, open, high, low, close, volume, value, ex_date]
-                                date_obj = datetime.strptime(row[0], "%Y/%m/%d")
-                                records.append({
-                                    "Date": date_obj,
-                                    "Open": float(row[1]),
-                                    "High": float(row[2]),
-                                    "Low": float(row[3]),
-                                    "Close": float(row[4]),
-                                    "Volume": int(row[5]),
-                                })
-                            except (ValueError, IndexError) as e:
-                                logger.debug(f"TWSE data parse error: {e}")
-                                continue
+                    try:
+                        data = resp.json()
+                        # Check if we got valid response
+                        if data.get("stat") in ("OK", "ok") and "data" in data and data["data"]:
+                            # TWSE format: [date, volume, value, open, high, low, close, change, txn_count, notes]
+                            # Index: 0=date, 3=open, 4=high, 5=low, 6=close, 1=volume
+                            for row in data["data"]:
+                                try:
+                                    # Date format: 民國年/月/日 (e.g., 115/05/04)
+                                    # Convert to Gregorian: 民國 + 1911 = 西元
+                                    date_parts = row[0].split('/')
+                                    roc_year = int(date_parts[0])
+                                    gregorian_year = roc_year + 1911
+                                    date_str_gregorian = f"{gregorian_year}/{date_parts[1]}/{date_parts[2]}"
+                                    date_obj = datetime.strptime(date_str_gregorian, "%Y/%m/%d")
+                                    
+                                    # Parse prices and volume, removing commas and spaces
+                                    open_price = float(str(row[3]).replace(",", "").strip())
+                                    high_price = float(str(row[4]).replace(",", "").strip())
+                                    low_price = float(str(row[5]).replace(",", "").strip())
+                                    close_price = float(str(row[6]).replace(",", "").strip())
+                                    volume = int(str(row[1]).replace(",", "").strip())
+                                    
+                                    records.append({
+                                        "Date": date_obj,
+                                        "Open": open_price,
+                                        "High": high_price,
+                                        "Low": low_price,
+                                        "Close": close_price,
+                                        "Volume": volume,
+                                    })
+                                except (ValueError, IndexError) as e:
+                                    logger.debug(f"Failed to parse TWSE row {row}: {e}")
+                                    continue
+                    except json.JSONDecodeError:
+                        pass
                 
                 current_date -= timedelta(days=1)
                 time.sleep(0.05)  # Rate limiting
@@ -181,15 +203,93 @@ def _get_tw_stock_from_twse_api(symbol: str, days: int = 250) -> pd.DataFrame:
             df.set_index("Date", inplace=True)
             df = df.sort_index()
             df = df[~df.index.duplicated(keep="last")]
-            logger.info(f"Fetched {len(df)} records for {symbol} from TWSE API")
+            logger.info(f"Fetched {len(df)} records for {symbol} from TWSE ({request_count} requests)")
             return df
+        else:
+            logger.warning(f"No data fetched for {symbol} from TWSE after {request_count} requests")
     except Exception as e:
-        logger.error(f"TWSE API fallback failed for {symbol}: {e}")
+        logger.error(f"TWSE API failed for {symbol}: {e}")
     
     return pd.DataFrame()
 
 
+def _get_tw_quote_from_twse(symbol: str) -> dict | None:
+    """
+    Fetch latest price and change info from TWSE for Taiwan stocks.
+    TWSE format: [date, volume, value, open, high, low, close, change, txn_count, notes]
+    Returns dict with price, change, change_pct, volume.
+    Returns None if unable to fetch.
+    """
+    if not symbol.upper().endswith(".TW"):
+        return None
+    
+    stock_code = symbol[:symbol.find(".")]  # Remove .TW suffix
+    
+    try:
+        # Try to get latest trading data
+        current_date = datetime.now()
+        
+        for _ in range(10):  # Try last 10 days
+            date_str = current_date.strftime("%Y%m%d")
+            
+            try:
+                url = "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
+                params = {
+                    "response": "json",
+                    "date": date_str,
+                    "stockNo": stock_code
+                }
+                resp = requests.get(url, params=params, timeout=5, verify=False)
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Check if we got valid response
+                    if data.get("stat") in ("OK", "ok") and "data" in data and data["data"]:
+                        # Get the most recent record (last entry)
+                        latest = data["data"][-1]
+                        try:
+                            # Extract values with correct indices
+                            # Index: 0=date, 3=open, 4=high, 5=low, 6=close, 1=volume
+                            close_price = float(str(latest[6]).replace(",", "").strip())  # Close price
+                            volume = int(str(latest[1]).replace(",", "").strip())  # Volume
+                            
+                            # Get previous close to calculate change
+                            prev_close = close_price
+                            if len(data["data"]) > 1:
+                                prev_close = float(str(data["data"][-2][6]).replace(",", "").strip())
+                            
+                            change = close_price - prev_close
+                            change_pct = (change / prev_close * 100) if prev_close != 0 else 0
+                            
+                            logger.info(f"Got quote for {symbol} from TWSE: {close_price}")
+                            return {
+                                "price": round(close_price, 4),
+                                "change": round(change, 4),
+                                "change_pct": round(change_pct, 2),
+                                "volume": volume,
+                            }
+                        except (ValueError, IndexError) as e:
+                            logger.debug(f"Failed to parse TWSE quote: {e}")
+            except requests.RequestException:
+                pass
+            
+            current_date -= timedelta(days=1)
+            time.sleep(0.05)
+        
+        logger.warning(f"Could not fetch quote for {symbol} from TWSE")
+        return None
+        
+    except Exception as e:
+        logger.error(f"TWSE quote fetch failed for {symbol}: {e}")
+        return None
+
+
 def get_ohlcv(symbol: str, interval: str = "1d", force_refresh: bool = False) -> pd.DataFrame:
+    """
+    Get OHLCV data with intelligent fallback for different sources.
+    For Taiwan stocks (.TW): TWSE API → yfinance → TradingView
+    For others: yfinance
+    """
     period = INTERVAL_PERIOD.get(interval, "2y")
     ttl = CACHE_TTL.get(interval, 300)
     cache_path = _cache_path(symbol, interval, period)
@@ -197,45 +297,75 @@ def get_ohlcv(symbol: str, interval: str = "1d", force_refresh: bool = False) ->
     if not force_refresh:
         cached = _load_cache(cache_path, ttl)
         if cached is not None and not cached.empty:
+            logger.debug(f"Loaded {symbol} from cache")
             return cached
 
-    # Try yfinance first
+    # Taiwan stocks have special handling
+    if symbol.upper().endswith(".TW"):
+        logger.info(f"Fetching Taiwan stock {symbol}...")
+        
+        # Step 1: Try TWSE API (most reliable for Taiwan stocks)
+        df = _get_tw_stock_from_twse_api(symbol, days=500)
+        if not df.empty:
+            logger.info(f"Successfully got {symbol} from TWSE API ({len(df)} records)")
+            _save_cache(cache_path, df)
+            return df
+        
+        logger.warning(f"TWSE API failed for {symbol}, trying yfinance...")
+        
+        # Step 2: Fallback to yfinance
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period=period, interval=interval, auto_adjust=True, actions=False)
+            if not df.empty:
+                df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+                df.index = df.index.tz_localize(None)
+                df = df[~df.index.duplicated(keep="last")]
+                df = df.sort_index()
+                logger.info(f"Got {symbol} from yfinance ({len(df)} records)")
+                _save_cache(cache_path, df)
+                return df
+            else:
+                logger.warning(f"yfinance returned empty data for {symbol}")
+        except Exception as e:
+            logger.warning(f"yfinance failed for {symbol}: {e}")
+        
+        # Step 3: Try alternative data sources (could be extended)
+        logger.warning(f"Both TWSE and yfinance failed for {symbol}")
+        return pd.DataFrame()
+
+    # For non-Taiwan stocks, use yfinance
     try:
+        logger.info(f"Fetching {symbol} from yfinance...")
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval, auto_adjust=True, actions=False)
         if df.empty:
-            logger.warning(f"No data from yfinance for {symbol}, trying fallback")
-            # Try TWSE API for Taiwan stocks
-            if symbol.endswith(".TW"):
-                df = _get_tw_stock_from_twse_api(symbol)
-            if df.empty:
-                logger.warning(f"No data from TWSE for {symbol}")
-                return pd.DataFrame()
+            logger.warning(f"No data from yfinance for {symbol}")
+            return pd.DataFrame()
         else:
             df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
             df.index = df.index.tz_localize(None)
             df = df[~df.index.duplicated(keep="last")]
             df = df.sort_index()
+            logger.info(f"Got {symbol} from yfinance ({len(df)} records)")
             _save_cache(cache_path, df)
             return df
     except Exception as e:
         logger.error(f"yfinance error for {symbol}: {e}")
-        # Try TWSE API as fallback
-        if symbol.endswith(".TW"):
-            df = _get_tw_stock_from_twse_api(symbol)
-            if not df.empty:
-                _save_cache(cache_path, df)
-                return df
         return pd.DataFrame()
-    
-    # Save and return successful fallback data
-    if not df.empty:
-        _save_cache(cache_path, df)
-    return df
 
 
 def get_quote(symbol: str) -> dict:
-    """Get latest price and change info"""
+    """Get latest price and change info. For Taiwan stocks, use TWSE API first."""
+    # For Taiwan stocks, try TWSE API first
+    if symbol.upper().endswith(".TW"):
+        logger.info(f"Fetching quote for Taiwan stock {symbol} from TWSE...")
+        tw_quote = _get_tw_quote_from_twse(symbol)
+        if tw_quote is not None:
+            return tw_quote
+        logger.warning(f"TWSE quote fetch failed for {symbol}, falling back to yfinance...")
+    
+    # Fallback to yfinance
     try:
         t = yf.Ticker(symbol)
         info = t.fast_info
@@ -243,12 +373,17 @@ def get_quote(symbol: str) -> dict:
         prev_close = getattr(info, "previous_close", None)
         change = (price - prev_close) if price and prev_close else None
         change_pct = (change / prev_close * 100) if change and prev_close else None
-        return {
+        
+        quote = {
             "price": round(float(price), 4) if price else None,
             "change": round(float(change), 4) if change else None,
             "change_pct": round(float(change_pct), 2) if change_pct else None,
             "volume": int(getattr(info, "regular_market_volume", 0) or 0),
         }
+        
+        # Filter out None values
+        return {k: v for k, v in quote.items() if v is not None}
+        
     except Exception as e:
         logger.warning(f"Quote fetch failed for {symbol}: {e}")
         return {}
