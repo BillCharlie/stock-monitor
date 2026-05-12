@@ -368,11 +368,27 @@ def send_test_email(to: str | None = None) -> dict:
 
     # ── try Resend first ──────────────────────────────────────────────────────
     if resend_key:
+        import requests as _req
         result["method"] = "resend"
-        ok = _send_via_resend(resend_key, [recipient], subject, test_html)
-        result["success"] = ok
-        if not ok:
-            result["error"] = "Resend API call failed — check Railway logs for details"
+        try:
+            resp = _req.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {resend_key}"},
+                json={
+                    "from": "股市監控系統 <onboarding@resend.dev>",
+                    "to": [recipient],
+                    "subject": subject,
+                    "html": test_html,
+                },
+                timeout=30,
+            )
+            result["resend_status"] = resp.status_code
+            result["resend_body"] = resp.text[:500]
+            result["success"] = resp.status_code in (200, 201)
+            if not result["success"]:
+                result["error"] = f"Resend HTTP {resp.status_code}: {resp.text[:300]}"
+        except Exception as e:
+            result["error"] = f"Resend request exception: {e}"
         return result
 
     # ── fallback: Gmail SMTP ──────────────────────────────────────────────────
