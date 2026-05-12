@@ -262,97 +262,147 @@ def send_daily_report(html_content: str, daily_report: dict, pdf_path: str | Non
         msg.attach(attachment)
         logger.info(f"PDF attached: {pdf_filename}")
 
+    # ── prefer Resend HTTP API (works on Railway / cloud) ─────────────────────
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    if resend_key:
+        return _send_via_resend(resend_key, recipients, subject, full_html, pdf_path)
+
+    # ── fallback: Gmail SMTP (local dev only) ─────────────────────────────────
     return _smtp_send(sender, password, recipients, msg)
 
 
+def _send_via_resend(api_key: str, recipients: list[str], subject: str,
+                     full_html: str, pdf_path: str | None = None) -> bool:
+    """
+    Send via Resend HTTP API (port 443 — works on Railway).
+    Free tier: 3 000 emails/month, 100/day.
+    Sends FROM onboarding@resend.dev unless a custom verified domain is configured.
+    """
+    import requests as _req, base64
+
+    payload: dict = {
+        "from": "股市監控系統 <onboarding@resend.dev>",
+        "to": recipients,
+        "subject": subject,
+        "html": full_html,
+    }
+
+    if pdf_path and os.path.exists(pdf_path):
+        with open(pdf_path, "rb") as f:
+            payload["attachments"] = [{
+                "filename": os.path.basename(pdf_path),
+                "content": base64.b64encode(f.read()).decode(),
+            }]
+
+    try:
+        resp = _req.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+            timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            logger.info("Resend API: email sent → %s", recipients)
+            return True
+        logger.error("Resend API %d: %s", resp.status_code, resp.text)
+        return False
+    except Exception as e:
+        logger.error("Resend API request failed: %s", e)
+        return False
+
+
 def _smtp_send(sender: str, password: str, recipients: list[str], msg) -> bool:
-    """Try port 465 (SSL) first; fall back to port 587 (STARTTLS) if it fails."""
+    """
+    Try Gmail SMTP — port 465 (SSL) first, then port 587 (STARTTLS).
+    NOTE: Most cloud hosts (including Railway) block SMTP ports.
+    This is kept as a fallback for local development only.
+    """
     raw = msg.as_bytes()
 
-    # --- attempt 1: port 465 SSL ---
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as server:
-            server.login(sender, password)
-            server.sendmail(sender, recipients, raw)
-        logger.info(f"Email sent via port 465 to {recipients}")
-        return True
-    except smtplib.SMTPAuthenticationError as e:
-        logger.error("Gmail auth failed (465): %s", e)
-        return False          # wrong credentials — no point retrying
-    except Exception as e:
-        logger.warning("Port 465 failed (%s), trying port 587…", e)
+    for port, use_ssl in [(465, True), (587, False)]:
+        try:
+            if use_ssl:
+                with smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=30) as s:
+                    s.login(sender, password)
+                    s.sendmail(sender, recipients, raw)
+            else:
+                with smtplib.SMTP("smtp.gmail.com", port, timeout=30) as s:
+                    s.ehlo(); s.starttls(); s.ehlo()
+                    s.login(sender, password)
+                    s.sendmail(sender, recipients, raw)
+            logger.info("Email sent via SMTP port %d to %s", port, recipients)
+            return True
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error("Gmail auth failed (port %d): %s", port, e)
+            return False
+        except Exception as e:
+            logger.warning("SMTP port %d failed: %s", port, e)
 
-    # --- attempt 2: port 587 STARTTLS ---
-    try:
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(sender, password)
-            server.sendmail(sender, recipients, raw)
-        logger.info(f"Email sent via port 587 to {recipients}")
-        return True
-    except smtplib.SMTPAuthenticationError as e:
-        logger.error("Gmail auth failed (587): %s", e)
-        return False
-    except Exception as e:
-        logger.error("Port 587 also failed: %s", e)
-        return False
+    logger.error("All SMTP ports blocked — use RESEND_API_KEY on cloud hosts")
+    return False
 
 
 def send_test_email(to: str | None = None) -> dict:
     """
     Attempt to send a minimal test email and return a detailed status dict.
+    Tries Resend HTTP API first, falls back to Gmail SMTP.
     Used by the /api/test/email endpoint for live diagnosis.
     """
-    sender   = os.getenv("GMAIL_SENDER", "").strip()
-    password = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
-    recipient = to or os.getenv("REPORT_RECIPIENT", "chenbill718@gmail.com").strip()
+    recipient  = to or os.getenv("REPORT_RECIPIENT", "chenbill718@gmail.com").strip()
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    sender     = os.getenv("GMAIL_SENDER", "").strip()
+    password   = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
+    now        = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     result: dict = {
-        "sender_configured": bool(sender),
-        "password_configured": bool(password) and password != "xxxxxxxxxxxxxxxx",
+        "resend_configured": bool(resend_key),
+        "smtp_configured": bool(sender) and bool(password) and password != "xxxxxxxxxxxxxxxx",
         "recipient": recipient,
-        "port_tried": None,
+        "method": None,
         "success": False,
         "error": None,
     }
 
-    if not sender or not password or password == "xxxxxxxxxxxxxxxx":
-        result["error"] = "Gmail credentials missing in environment"
+    test_html = f"<h3>✅ 股市監控 — 測試郵件</h3><p>Railway 郵件系統連線正常。時間：{now}</p>"
+    subject   = f"[股市監控] ✅ 測試郵件 {now}"
+
+    # ── try Resend first ──────────────────────────────────────────────────────
+    if resend_key:
+        result["method"] = "resend"
+        ok = _send_via_resend(resend_key, [recipient], subject, test_html)
+        result["success"] = ok
+        if not ok:
+            result["error"] = "Resend API call failed — check Railway logs for details"
         return result
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # ── fallback: Gmail SMTP ──────────────────────────────────────────────────
+    if not sender or not password or password == "xxxxxxxxxxxxxxxx":
+        result["error"] = "No RESEND_API_KEY and Gmail credentials missing — email cannot be sent"
+        return result
+
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[股市監控] ✅ 測試郵件 {now}"
+    msg["Subject"] = subject
     msg["From"]    = f"股市監控系統 <{sender}>"
     msg["To"]      = recipient
-    msg.attach(MIMEText(
-        f"<h3>✅ 測試郵件</h3><p>Railway SMTP 連線正常。時間：{now}</p>",
-        "html", "utf-8"
-    ))
+    msg.attach(MIMEText(test_html, "html", "utf-8"))
     raw = msg.as_bytes()
 
     for port, use_ssl in [(465, True), (587, False)]:
-        result["port_tried"] = port
+        result["method"] = f"smtp:{port}"
         try:
             if use_ssl:
                 with smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=20) as s:
-                    s.login(sender, password)
-                    s.sendmail(sender, [recipient], raw)
+                    s.login(sender, password); s.sendmail(sender, [recipient], raw)
             else:
                 with smtplib.SMTP("smtp.gmail.com", port, timeout=20) as s:
                     s.ehlo(); s.starttls(); s.ehlo()
-                    s.login(sender, password)
-                    s.sendmail(sender, [recipient], raw)
+                    s.login(sender, password); s.sendmail(sender, [recipient], raw)
             result["success"] = True
-            result["error"] = None
             return result
         except smtplib.SMTPAuthenticationError as e:
-            result["error"] = f"Auth failed (port {port}): {e}"
-            return result   # wrong password → no point retrying other port
+            result["error"] = f"Gmail auth failed (port {port}): {e}"
+            return result
         except Exception as e:
-            result["error"] = f"port {port}: {e}"
-            # try next port
+            result["error"] = f"SMTP port {port}: {e}"
 
     return result
