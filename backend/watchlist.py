@@ -62,6 +62,7 @@ WATCHLIST = {
                     {"symbol": "3189.TW",  "name": "景碩科技",   "name_en": "Kinsus Interconnect Technology",  "tags": ["ABF載板", "FC-BGA"]},
                     {"symbol": "3037.TW",  "name": "欣興電子",   "name_en": "Unimicron Technology",            "tags": ["ABF/BT載板", "HDI軟板"]},
                     {"symbol": "8046.TW",  "name": "南電",        "name_en": "Nan Ya PCB",                      "tags": ["ABF載板", "伺服器GPU封裝"]},
+                    {"symbol": "4958.TW",  "name": "臻鼎科技",   "name_en": "Zhen Ding Technology",            "tags": ["HDI軟硬板", "FPC", "蘋果供應鏈"]},
                 ],
             },
             "功率元件": [
