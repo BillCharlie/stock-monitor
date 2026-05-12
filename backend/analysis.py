@@ -17,7 +17,7 @@ from indicators import (
     calculate_obv,
     calculate_rsi,
 )
-from stock_data import get_ohlcv
+from stock_data import get_ohlcv, get_investors_data
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,187 @@ def _linear_regression_forecast(closes: np.ndarray, forecast_days: int = 5) -> d
         "trend": "上升" if slope > 0 else "下降",
         "method": "OLS線性回歸 (20日)",
     }
+
+
+def _analyze_institutional_investors(symbol: str) -> dict:
+    """
+    Analyze institutional investors and major holders.
+    Returns institutional holdings, three forces data (for TW stocks), and signals.
+    """
+    try:
+        investors_data = get_investors_data(symbol)
+        
+        # Taiwan stocks: 三大法人 data
+        if investors_data.get("type") == "tw":
+            if "error" in investors_data:
+                return {
+                    "type": "tw",
+                    "symbol": symbol,
+                    "status": "no_data",
+                    "error": investors_data.get("error")
+                }
+            
+            latest_date = investors_data.get("latest_date")
+            foreign_net = investors_data.get("foreign_net", 0)  # 外資買賣超
+            trust_net = investors_data.get("trust_net", 0)      # 投信買賣超
+            dealer_net = investors_data.get("dealer_net", 0)    # 自營商買賣超
+            total_net = investors_data.get("total_net", 0)      # 三大法人合計
+            trend = investors_data.get("trend", [])
+            
+            # Analyze the trend
+            signals = []
+            score = 0.0
+            
+            # Overall 三大法人 signal
+            if total_net > 0:
+                signals.append({
+                    "type": "bullish",
+                    "signal": f"三大法人合計買超 {total_net:,} 股，機構看多"
+                })
+                score += 1.0
+            elif total_net < 0:
+                signals.append({
+                    "type": "bearish",
+                    "signal": f"三大法人合計賣超 {abs(total_net):,} 股，機構看空"
+                })
+                score -= 1.0
+            
+            # Individual investor breakdown
+            if foreign_net > 0:
+                signals.append({
+                    "type": "bullish",
+                    "signal": f"外資買超 {foreign_net:,} 股"
+                })
+                score += 0.5
+            elif foreign_net < 0:
+                signals.append({
+                    "type": "bearish",
+                    "signal": f"外資賣超 {abs(foreign_net):,} 股"
+                })
+                score -= 0.5
+            
+            if trust_net > 0:
+                signals.append({
+                    "type": "bullish",
+                    "signal": f"投信買超 {trust_net:,} 股"
+                })
+                score += 0.3
+            elif trust_net < 0:
+                signals.append({
+                    "type": "bearish",
+                    "signal": f"投信賣超 {abs(trust_net):,} 股"
+                })
+                score -= 0.3
+            
+            if dealer_net > 0:
+                signals.append({
+                    "type": "bullish",
+                    "signal": f"自營商買超 {dealer_net:,} 股"
+                })
+                score += 0.2
+            elif dealer_net < 0:
+                signals.append({
+                    "type": "bearish",
+                    "signal": f"自營商賣超 {abs(dealer_net):,} 股"
+                })
+                score -= 0.2
+            
+            # Trend analysis: if multiple days trending same direction
+            if trend and len(trend) >= 3:
+                recent_3 = trend[-3:]
+                total_3_days = sum(t.get("total_net", 0) for t in recent_3)
+                
+                if total_3_days > 0:
+                    signals.append({
+                        "type": "bullish",
+                        "signal": f"近3日三大法人累計買超 {total_3_days:,} 股，持續買進信號"
+                    })
+                    score += 1.0
+                elif total_3_days < 0:
+                    signals.append({
+                        "type": "bearish",
+                        "signal": f"近3日三大法人累計賣超 {abs(total_3_days):,} 股，持續賣出信號"
+                    })
+                    score -= 1.0
+            
+            return {
+                "type": "tw",
+                "symbol": symbol,
+                "latest_date": latest_date,
+                "components": {
+                    "foreign_net": foreign_net,
+                    "trust_net": trust_net,
+                    "dealer_net": dealer_net,
+                    "total_net": total_net,
+                },
+                "trend": trend[-5:] if trend else [],  # Last 5 days
+                "signals": signals,
+                "score": round(score, 2),
+            }
+        
+        # US stocks: Institutional holdings
+        elif investors_data.get("type") == "us":
+            if "error" in investors_data:
+                return {
+                    "type": "us",
+                    "symbol": symbol,
+                    "status": "no_data",
+                    "error": investors_data.get("error")
+                }
+            
+            held_pct_insiders = investors_data.get("held_pct_insiders")
+            held_pct_institutions = investors_data.get("held_pct_institutions")
+            top_institutions = investors_data.get("top_institutions", [])
+            
+            signals = []
+            score = 0.0
+            
+            # Institutional ownership signal
+            if held_pct_institutions:
+                if held_pct_institutions > 0.70:  # >70%
+                    signals.append({
+                        "type": "bullish",
+                        "signal": f"機構持股高達 {held_pct_institutions*100:.1f}%，主力高度看好"
+                    })
+                    score += 1.0
+                elif held_pct_institutions > 0.50:  # >50%
+                    signals.append({
+                        "type": "bullish",
+                        "signal": f"機構持股 {held_pct_institutions*100:.1f}%，控制力強"
+                    })
+                    score += 0.5
+                elif held_pct_institutions < 0.30:  # <30%
+                    signals.append({
+                        "type": "neutral",
+                        "signal": f"機構持股僅 {held_pct_institutions*100:.1f}%，散戶居多"
+                    })
+            
+            # Insider holdings
+            if held_pct_insiders:
+                if held_pct_insiders > 0.20:
+                    signals.append({
+                        "type": "bullish",
+                        "signal": f"內部人士持股 {held_pct_insiders*100:.1f}%，高管看好公司"
+                    })
+                    score += 0.5
+            
+            return {
+                "type": "us",
+                "symbol": symbol,
+                "held_pct_insiders": held_pct_insiders,
+                "held_pct_institutions": held_pct_institutions,
+                "top_institutions": top_institutions[:5] if top_institutions else [],
+                "signals": signals,
+                "score": round(score, 2),
+            }
+    
+    except Exception as e:
+        logger.error(f"Failed to analyze investors for {symbol}: {e}")
+        return {
+            "symbol": symbol,
+            "status": "error",
+            "error": str(e)
+        }
 
 
 def analyze_stock(symbol: str, name: str = "", interval: str = "1d") -> dict:
@@ -324,6 +505,7 @@ def analyze_stock(symbol: str, name: str = "", interval: str = "1d") -> dict:
         "resistance": round(resistance, 2) if resistance else None,
         "prediction_5d": prediction_5d,
         "prediction_20d": prediction_20d,
+        "investors": _analyze_institutional_investors(symbol),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
