@@ -475,6 +475,27 @@ def test_email(to: Optional[str] = Query(None)):
     return result
 
 
+@app.get("/api/test/env", dependencies=[Depends(_require_report_auth)])
+def test_env():
+    """Return which expected env vars are present (values masked) for diagnosis."""
+    keys = [
+        "GMAIL_SENDER", "GMAIL_APP_PASSWORD",
+        "REPORT_RECIPIENT", "REPORT_RECIPIENT_2",
+        "OPENAI_API_KEY", "REPORT_HOUR", "REPORT_MINUTE",
+        "API_SECRET_REPORT", "API_SECRET_STOCK", "DATA_DIR",
+    ]
+    result = {}
+    for k in keys:
+        val = os.getenv(k, "")
+        if not val:
+            result[k] = "❌ 未設定"
+        elif k in ("GMAIL_APP_PASSWORD", "OPENAI_API_KEY", "API_SECRET_REPORT", "API_SECRET_STOCK"):
+            result[k] = f"✅ 已設定 ({len(val)} chars)"
+        else:
+            result[k] = f"✅ {val}"
+    return result
+
+
 # ─── News ─────────────────────────────────────────────────────────────────────
 
 @app.get("/api/news")
