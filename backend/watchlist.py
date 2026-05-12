@@ -153,6 +153,12 @@ WATCHLIST = {
                 {"symbol": "3017.TW",  "name": "奇鋐科技",     "name_en": "Asia Vital Components (AVC)",       "tags": ["CPU/GPU散熱", "液冷模組"]},
                 {"symbol": "3324.TW",  "name": "雙鴻科技",     "name_en": "Shuang Hong Technology",            "tags": ["均熱板/散熱板", "液冷板"]},
             ],
+            "PCB": [
+                {"symbol": "3189.TW",  "name": "景碩科技",     "name_en": "Kinsus Interconnect Technology",    "tags": ["ABF載板", "FC-BGA"]},
+                {"symbol": "3037.TW",  "name": "欣興電子",     "name_en": "Unimicron Technology",              "tags": ["ABF/BT載板", "HDI軟板"]},
+                {"symbol": "8046.TW",  "name": "南電",          "name_en": "Nan Ya PCB",                        "tags": ["ABF載板", "伺服器GPU封裝"]},
+                {"symbol": "4958.TW",  "name": "臻鼎科技",     "name_en": "Zhen Ding Technology",              "tags": ["HDI軟硬板", "FPC", "蘋果供應鏈"]},
+            ],
             "科技ETF": [
                 {"symbol": "0052.TW",  "name": "富邦科技",     "name_en": "Fubon MSCI Taiwan Technology ETF",  "tags": ["台灣科技50", "電子權值股ETF"]},
             ],
