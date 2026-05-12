@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from analysis import analyze_stock, generate_daily_report
-from email_sender import send_daily_report, send_login_notification
+from email_sender import send_daily_report, send_login_notification, send_test_email
 from gpt_analysis import generate_gpt_report
 from news_fetcher import fetch_all_news, fetch_category_news, get_last_updated, NEWS_CATEGORIES
 from pdf_generator import latest_report_path, save_report_pdf
@@ -148,7 +148,7 @@ def _refresh_news():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import threading
-    report_hour   = int(os.getenv("REPORT_HOUR", "7"))
+    report_hour   = int(os.getenv("REPORT_HOUR", "17"))
     report_minute = int(os.getenv("REPORT_MINUTE", "0"))
 
     scheduler = BackgroundScheduler(timezone="Asia/Taipei")
@@ -459,7 +459,20 @@ def get_gpt_report():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "stocks_analyzed": len(_stock_analyses), "port": 8765}
+    report_hour   = int(os.getenv("REPORT_HOUR", "17"))
+    report_minute = int(os.getenv("REPORT_MINUTE", "0"))
+    return {
+        "status": "ok",
+        "stocks_analyzed": len(_stock_analyses),
+        "email_schedule": f"{report_hour:02d}:{report_minute:02d} Asia/Taipei (Mon-Fri)",
+    }
+
+
+@app.post("/api/test/email", dependencies=[Depends(_require_report_auth)])
+def test_email(to: Optional[str] = Query(None)):
+    """Send a minimal test email and return SMTP diagnostic info."""
+    result = send_test_email(to)
+    return result
 
 
 # ─── News ─────────────────────────────────────────────────────────────────────

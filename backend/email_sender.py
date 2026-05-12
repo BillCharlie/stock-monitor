@@ -262,18 +262,97 @@ def send_daily_report(html_content: str, daily_report: dict, pdf_path: str | Non
         msg.attach(attachment)
         logger.info(f"PDF attached: {pdf_filename}")
 
+    return _smtp_send(sender, password, recipients, msg)
+
+
+def _smtp_send(sender: str, password: str, recipients: list[str], msg) -> bool:
+    """Try port 465 (SSL) first; fall back to port 587 (STARTTLS) if it fails."""
+    raw = msg.as_bytes()
+
+    # --- attempt 1: port 465 SSL ---
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=30) as server:
             server.login(sender, password)
-            server.sendmail(sender, recipients, msg.as_bytes())
-        logger.info(f"Daily report email sent to {recipients}")
+            server.sendmail(sender, recipients, raw)
+        logger.info(f"Email sent via port 465 to {recipients}")
         return True
-    except smtplib.SMTPAuthenticationError:
-        logger.error(
-            "Gmail authentication failed. Check GMAIL_SENDER and GMAIL_APP_PASSWORD in .env.\n"
-            "Make sure you are using an App Password, not your login password."
-        )
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error("Gmail auth failed (465): %s", e)
+        return False          # wrong credentials — no point retrying
+    except Exception as e:
+        logger.warning("Port 465 failed (%s), trying port 587…", e)
+
+    # --- attempt 2: port 587 STARTTLS ---
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(sender, password)
+            server.sendmail(sender, recipients, raw)
+        logger.info(f"Email sent via port 587 to {recipients}")
+        return True
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error("Gmail auth failed (587): %s", e)
         return False
     except Exception as e:
-        logger.error(f"Email send failed: {e}")
+        logger.error("Port 587 also failed: %s", e)
         return False
+
+
+def send_test_email(to: str | None = None) -> dict:
+    """
+    Attempt to send a minimal test email and return a detailed status dict.
+    Used by the /api/test/email endpoint for live diagnosis.
+    """
+    sender   = os.getenv("GMAIL_SENDER", "").strip()
+    password = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
+    recipient = to or os.getenv("REPORT_RECIPIENT", "chenbill718@gmail.com").strip()
+
+    result: dict = {
+        "sender_configured": bool(sender),
+        "password_configured": bool(password) and password != "xxxxxxxxxxxxxxxx",
+        "recipient": recipient,
+        "port_tried": None,
+        "success": False,
+        "error": None,
+    }
+
+    if not sender or not password or password == "xxxxxxxxxxxxxxxx":
+        result["error"] = "Gmail credentials missing in environment"
+        return result
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"[股市監控] ✅ 測試郵件 {now}"
+    msg["From"]    = f"股市監控系統 <{sender}>"
+    msg["To"]      = recipient
+    msg.attach(MIMEText(
+        f"<h3>✅ 測試郵件</h3><p>Railway SMTP 連線正常。時間：{now}</p>",
+        "html", "utf-8"
+    ))
+    raw = msg.as_bytes()
+
+    for port, use_ssl in [(465, True), (587, False)]:
+        result["port_tried"] = port
+        try:
+            if use_ssl:
+                with smtplib.SMTP_SSL("smtp.gmail.com", port, timeout=20) as s:
+                    s.login(sender, password)
+                    s.sendmail(sender, [recipient], raw)
+            else:
+                with smtplib.SMTP("smtp.gmail.com", port, timeout=20) as s:
+                    s.ehlo(); s.starttls(); s.ehlo()
+                    s.login(sender, password)
+                    s.sendmail(sender, [recipient], raw)
+            result["success"] = True
+            result["error"] = None
+            return result
+        except smtplib.SMTPAuthenticationError as e:
+            result["error"] = f"Auth failed (port {port}): {e}"
+            return result   # wrong password → no point retrying other port
+        except Exception as e:
+            result["error"] = f"port {port}: {e}"
+            # try next port
+
+    return result
