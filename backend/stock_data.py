@@ -4,11 +4,16 @@ import time
 import hashlib
 import logging
 from datetime import datetime, timedelta
+import base64
+import urllib3
 
 import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
+
+# Suppress SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +66,129 @@ def _save_cache(path: str, df: pd.DataFrame) -> None:
         logger.warning(f"Cache save failed: {e}")
 
 
+def _get_tw_stock_from_tradingview(symbol: str, max_retries: int = 3) -> pd.DataFrame:
+    """
+    Fallback: Fetch Taiwan stock data from TradingView using Playwright.
+    TradingView symbols: TWSE:3363 (Taiwan exchange format)
+    """
+    try:
+        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+    except ImportError:
+        logger.warning("playwright not installed, skipping TradingView fallback")
+        return pd.DataFrame()
+
+    # Convert symbol: 3363.TW -> TWSE:3363
+    if symbol.endswith(".TW"):
+        tw_symbol = f"TWSE:{symbol[:-3]}"
+    else:
+        return pd.DataFrame()
+
+    try:
+        for attempt in range(max_retries):
+            try:
+                with sync_playwright() as p:
+                    # Use headless browser
+                    browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+                    context = browser.new_context(
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    )
+                    page = context.new_page()
+                    
+                    # Navigate to TradingView chart
+                    url = f"https://www.tradingview.com/chart/?symbol={tw_symbol}"
+                    page.goto(url, wait_until="load", timeout=15000)
+                    time.sleep(2)  # Wait for data to load
+                    
+                    # Try to extract chart data from page
+                    data_script = page.content()
+                    
+                    browser.close()
+                    logger.warning(f"TradingView fetch incomplete for {symbol}")
+                    return pd.DataFrame()
+            except PlaywrightTimeoutError:
+                if attempt < max_retries - 1:
+                    logger.info(f"TradingView timeout, retry {attempt+1}/{max_retries} for {symbol}")
+                    continue
+                else:
+                    raise
+    except Exception as e:
+        logger.error(f"TradingView fallback failed for {symbol}: {e}")
+    
+    return pd.DataFrame()
+
+
+def _get_tw_stock_from_twse_api(symbol: str, days: int = 250) -> pd.DataFrame:
+    """
+    Fallback: Fetch Taiwan stock data directly from TWSE (Taiwan Stock Exchange).
+    Fetches recent data more efficiently.
+    """
+    if not symbol.endswith(".TW"):
+        return pd.DataFrame()
+    
+    stock_code = symbol[:-3]
+    records = []
+    
+    try:
+        # Only fetch recent data (last N days) to speed up
+        end_date = datetime.now()
+        current_date = end_date
+        
+        request_count = 0
+        max_requests = 250  # Limit requests to avoid rate limiting
+        
+        while len(records) < days and request_count < max_requests:
+            date_str = current_date.strftime("%Y%m%d")
+            
+            try:
+                url = "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
+                params = {
+                    "response": "json",
+                    "date": date_str,
+                    "stockNo": stock_code
+                }
+                resp = requests.get(url, params=params, timeout=5, verify=False)
+                request_count += 1
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if "data" in data and data["data"]:
+                        for row in data["data"]:
+                            try:
+                                # TWSE format: [date, open, high, low, close, volume, value, ex_date]
+                                date_obj = datetime.strptime(row[0], "%Y/%m/%d")
+                                records.append({
+                                    "Date": date_obj,
+                                    "Open": float(row[1]),
+                                    "High": float(row[2]),
+                                    "Low": float(row[3]),
+                                    "Close": float(row[4]),
+                                    "Volume": int(row[5]),
+                                })
+                            except (ValueError, IndexError) as e:
+                                logger.debug(f"TWSE data parse error: {e}")
+                                continue
+                
+                current_date -= timedelta(days=1)
+                time.sleep(0.05)  # Rate limiting
+                
+            except requests.RequestException as e:
+                logger.debug(f"TWSE fetch error for {date_str}: {e}")
+                current_date -= timedelta(days=1)
+                continue
+        
+        if records:
+            df = pd.DataFrame(records)
+            df.set_index("Date", inplace=True)
+            df = df.sort_index()
+            df = df[~df.index.duplicated(keep="last")]
+            logger.info(f"Fetched {len(df)} records for {symbol} from TWSE API")
+            return df
+    except Exception as e:
+        logger.error(f"TWSE API fallback failed for {symbol}: {e}")
+    
+    return pd.DataFrame()
+
+
 def get_ohlcv(symbol: str, interval: str = "1d", force_refresh: bool = False) -> pd.DataFrame:
     period = INTERVAL_PERIOD.get(interval, "2y")
     ttl = CACHE_TTL.get(interval, 300)
@@ -71,21 +199,39 @@ def get_ohlcv(symbol: str, interval: str = "1d", force_refresh: bool = False) ->
         if cached is not None and not cached.empty:
             return cached
 
+    # Try yfinance first
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval, auto_adjust=True, actions=False)
         if df.empty:
-            logger.warning(f"No data returned for {symbol}")
-            return pd.DataFrame()
-        df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-        df.index = df.index.tz_localize(None)
-        df = df[~df.index.duplicated(keep="last")]
-        df = df.sort_index()
-        _save_cache(cache_path, df)
-        return df
+            logger.warning(f"No data from yfinance for {symbol}, trying fallback")
+            # Try TWSE API for Taiwan stocks
+            if symbol.endswith(".TW"):
+                df = _get_tw_stock_from_twse_api(symbol)
+            if df.empty:
+                logger.warning(f"No data from TWSE for {symbol}")
+                return pd.DataFrame()
+        else:
+            df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+            df.index = df.index.tz_localize(None)
+            df = df[~df.index.duplicated(keep="last")]
+            df = df.sort_index()
+            _save_cache(cache_path, df)
+            return df
     except Exception as e:
         logger.error(f"yfinance error for {symbol}: {e}")
+        # Try TWSE API as fallback
+        if symbol.endswith(".TW"):
+            df = _get_tw_stock_from_twse_api(symbol)
+            if not df.empty:
+                _save_cache(cache_path, df)
+                return df
         return pd.DataFrame()
+    
+    # Save and return successful fallback data
+    if not df.empty:
+        _save_cache(cache_path, df)
+    return df
 
 
 def get_quote(symbol: str) -> dict:
