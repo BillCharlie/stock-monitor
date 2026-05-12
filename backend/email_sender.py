@@ -11,6 +11,7 @@ from datetime import datetime
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from html import escape
 
 from dotenv import load_dotenv
 
@@ -26,6 +27,8 @@ def _build_fallback_html(daily_report: dict) -> str:
     top_buy = daily_report.get("top_opportunities", [])
     top_sell = daily_report.get("top_risks", [])
     sector = daily_report.get("sector_summary", {})
+    trump_news = daily_report.get("trump_news", {})
+    trump_impact = trump_news.get("impact", {}) if isinstance(trump_news, dict) else {}
 
     sentiment_color = "#26A69A" if sentiment == "多頭" else ("#EF5350" if sentiment == "空頭" else "#FFA726")
 
@@ -47,6 +50,36 @@ def _build_fallback_html(daily_report: dict) -> str:
         f"{v['sentiment']}</td><td style='padding:4px 8px;font-family:monospace'>{v['avg_score']:+.2f}</td></tr>"
         for sec, v in sector.items()
     )
+    trump_theme_rows = "".join(
+        f"<tr><td style='padding:4px 8px'>{escape(t.get('label',''))}</td>"
+        f"<td style='padding:4px 8px;color:#FFA726'>{escape(t.get('bias',''))}</td>"
+        f"<td style='padding:4px 8px'>{escape('、'.join(t.get('sectors', [])[:4]))}</td>"
+        f"<td style='padding:4px 8px;font-family:monospace'>{int(t.get('hit_count', 0))}</td></tr>"
+        for t in trump_impact.get("themes", [])[:6]
+    )
+    trump_sections = trump_news.get("sections", {}) if isinstance(trump_news, dict) else {}
+    trump_latest = []
+    for key in ("truth_posts", "white_house", "english_news", "x_posts"):
+        for item in trump_sections.get(key, [])[:2]:
+            trump_latest.append(item)
+    trump_latest_rows = "".join(
+        f"<li style='margin:4px 0'><strong>{escape(item.get('source',''))}</strong> "
+        f"<span style='color:#888'>{escape((item.get('published_at') or '')[:16])}</span> — "
+        f"{escape(item.get('title') or item.get('summary') or '')}</li>"
+        for item in trump_latest[:8]
+    )
+    trump_block = ""
+    if trump_impact or trump_latest_rows:
+        trump_block = f"""
+<h3 style="color:#40C4FF;margin-top:16px">TrumpNews 政策訊號</h3>
+<p>整體判讀：<strong style="color:#FFA726">{escape(trump_impact.get('overall', '目前未偵測到明確訊號'))}</strong></p>
+<table style="border-collapse:collapse;width:100%">
+<tr style="background:#0A1A2A;color:#888;font-size:12px">
+  <th style="padding:4px 8px;text-align:left">主題</th><th style="padding:4px 8px;text-align:left">屬性</th>
+  <th style="padding:4px 8px;text-align:left">可能影響板塊</th><th style="padding:4px 8px;text-align:left">訊號數</th>
+</tr>{trump_theme_rows}</table>
+<ul style="padding-left:18px">{trump_latest_rows}</ul>
+"""
 
     return f"""
 <h2 style="color:#40C4FF">📊 量化技術分析報告（GPT分析未啟用）</h2>
@@ -72,6 +105,8 @@ def _build_fallback_html(daily_report: dict) -> str:
   <th style="padding:4px 8px;text-align:left">板塊</th><th style="padding:4px 8px;text-align:left">情緒</th>
   <th style="padding:4px 8px;text-align:left">平均評分</th>
 </tr>{sector_rows}</table>
+
+{trump_block}
 """
 
 

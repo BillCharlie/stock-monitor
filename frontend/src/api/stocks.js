@@ -107,4 +107,7 @@ export const api = {
     const qs = params.toString()
     return request(`/news${qs ? '?' + qs : ''}`)
   },
+
+  getTrumpNews: (force = false) =>
+    request(`/trump-news${force ? '?force=true' : ''}`),
 }

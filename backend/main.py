@@ -24,6 +24,7 @@ from email_sender import send_daily_report, send_login_notification, send_test_e
 from gpt_analysis import generate_gpt_report
 from news_fetcher import fetch_all_news, fetch_category_news, get_last_updated, NEWS_CATEGORIES
 from pdf_generator import latest_report_path, save_report_pdf
+from trump_news_fetcher import fetch_trump_news, get_trump_last_updated
 from indicators import (
     calculate_bollinger_bands,
     calculate_kd,
@@ -105,6 +106,11 @@ def _run_daily_analysis():
     if custom:
         full_wl["自訂觀察清單"] = custom
     report = generate_daily_report(full_wl)
+    try:
+        report["trump_news"] = fetch_trump_news()
+    except Exception as e:
+        logger.warning("TrumpNews fetch failed during daily analysis: %s", e)
+        report["trump_news"] = {}
     _daily_report = report
     _stock_analyses = report.get("all_results", {})
     logger.info(f"Daily analysis complete: {len(_stock_analyses)} stocks")
@@ -118,6 +124,7 @@ def _generate_and_deliver(trigger: str = "scheduler"):
     html = generate_gpt_report(
         _stock_analyses,
         market_sentiment=_daily_report.get("market_sentiment", "中性"),
+        trump_news=_daily_report.get("trump_news"),
     )
     if html:
         _gpt_report_html = html
@@ -140,8 +147,9 @@ def _run_morning_email():
 
 
 def _refresh_news():
-    logger.info("Refreshing news cache for all categories...")
+    logger.info("Refreshing news cache for all categories and TrumpNews...")
     fetch_all_news(force=True)
+    fetch_trump_news(force=True)
     logger.info("News cache refresh complete.")
 
 
@@ -167,6 +175,7 @@ async def lifespan(app: FastAPI):
 
     # Background initial news fetch (only fills cache if missing/stale)
     threading.Thread(target=fetch_all_news, daemon=True).start()
+    threading.Thread(target=fetch_trump_news, daemon=True).start()
 
     yield
     scheduler.shutdown()
@@ -425,10 +434,13 @@ def trigger_gpt_report():
     """Manually trigger GPT report → save PDF locally → send email with PDF attachment."""
     if not _daily_report:
         _run_daily_analysis()
+    if not _daily_report.get("trump_news"):
+        _daily_report["trump_news"] = fetch_trump_news()
 
     html = generate_gpt_report(
         _stock_analyses,
         market_sentiment=_daily_report.get("market_sentiment", "中性"),
+        trump_news=_daily_report.get("trump_news"),
     )
     status = "ok"
     if not html:
@@ -465,6 +477,7 @@ def health():
         "status": "ok",
         "stocks_analyzed": len(_stock_analyses),
         "email_schedule": f"{report_hour:02d}:{report_minute:02d} Asia/Taipei (Mon-Fri)",
+        "trump_news_last_updated": get_trump_last_updated(),
     }
 
 
@@ -483,13 +496,14 @@ def test_env():
         "REPORT_RECIPIENT", "REPORT_RECIPIENT_2",
         "OPENAI_API_KEY", "REPORT_HOUR", "REPORT_MINUTE",
         "API_SECRET_REPORT", "API_SECRET_STOCK", "DATA_DIR",
+        "TRUMP_X_BEARER_TOKEN", "TRUMP_X_USER_ID", "TRUMP_X_RSS_URL",
     ]
     result = {}
     for k in keys:
         val = os.getenv(k, "")
         if not val:
             result[k] = "❌ 未設定"
-        elif k in ("GMAIL_APP_PASSWORD", "OPENAI_API_KEY", "API_SECRET_REPORT", "API_SECRET_STOCK"):
+        elif k in ("GMAIL_APP_PASSWORD", "OPENAI_API_KEY", "API_SECRET_REPORT", "API_SECRET_STOCK", "TRUMP_X_BEARER_TOKEN"):
             result[k] = f"✅ 已設定 ({len(val)} chars)"
         else:
             result[k] = f"✅ {val}"
@@ -525,6 +539,15 @@ def get_news(
         "news": news,
         "last_updated": get_last_updated(),
     }
+
+
+@app.get("/api/trump-news")
+def get_trump_news(force: bool = Query(False)):
+    """
+    GET /api/trump-news              → Trump-related English news, X, Truth Social, White House updates
+    GET /api/trump-news?force=true   → bypass cache and re-fetch
+    """
+    return fetch_trump_news(force=force)
 
 
 # ─── PDF report download ──────────────────────────────────────────────────────

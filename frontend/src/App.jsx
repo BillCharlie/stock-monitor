@@ -4,6 +4,7 @@ import WatchlistPanel from './components/WatchlistPanel.jsx'
 import StockChart from './components/StockChart.jsx'
 import AnalysisPanel from './components/AnalysisPanel.jsx'
 import NewsPanel from './components/NewsPanel.jsx'
+import TrumpNewsPanel from './components/TrumpNewsPanel.jsx'
 import AccessKeyPanel from './components/AccessKeyPanel.jsx'
 import { api, keys } from './api/stocks.js'
 
@@ -108,6 +109,7 @@ export default function App() {
               { id: 'analysis', label: '個股分析' },
               { id: 'report',   label: '每日報告' },
               { id: 'news',     label: '消息面' },
+              { id: 'trumpNews', label: 'TrumpNews' },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -197,6 +199,9 @@ export default function App() {
             )}
             {activeTab === 'news' && (
               <NewsPanel onNeedKey={() => setShowKeys(true)} />
+            )}
+            {activeTab === 'trumpNews' && (
+              <TrumpNewsPanel onNeedKey={() => setShowKeys(true)} />
             )}
           </div>
         </div>

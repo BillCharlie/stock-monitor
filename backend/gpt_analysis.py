@@ -16,6 +16,7 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv
 from openai import OpenAI
+from trump_news_fetcher import fetch_trump_news, format_trump_news_for_prompt
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
@@ -104,9 +105,16 @@ def _build_analysis_section(all_results: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_prompt(all_results: dict, all_news: dict, market_sentiment: str, date_str: str) -> str:
+def _build_prompt(
+    all_results: dict,
+    all_news: dict,
+    market_sentiment: str,
+    date_str: str,
+    trump_news: dict | None = None,
+) -> str:
     analysis_text = _build_analysis_section(all_results)
     news_text = _build_news_section(all_news)
+    trump_text = format_trump_news_for_prompt(trump_news)
 
     return f"""你是一位專業的台灣/美國股市投資分析師，擅長技術分析、產業趨勢判斷與風險管理。
 今天是 {date_str}，請根據以下數據產生一份完整的每日投資分析報告。
@@ -122,8 +130,12 @@ def _build_prompt(all_results: dict, all_news: dict, market_sentiment: str, date
 {news_text}
 
 ═══════════════════════════════════
+【三、TrumpNews（川普英文新聞、X/Truth 發言、白宮官方訊息）】
+{trump_text}
+
+═══════════════════════════════════
 【報告要求】
-請產生一份完整的 HTML 格式投資分析報告，包含以下六個章節：
+請產生一份完整的 HTML 格式投資分析報告，包含以下七個章節：
 
 1. 📊 大盤與市場總覽
    - 今日市場情緒研判（多頭/空頭/中性）
@@ -146,7 +158,12 @@ def _build_prompt(all_results: dict, all_news: dict, market_sentiment: str, date
    - 結合今日新聞，分析對各產業/個股的潛在影響
    - 是否有重大事件需要特別關注
 
-6. 🔮 明日展望與操作建議
+6. TrumpNews 政策訊號與板塊衝擊
+   - 整理川普相關英文新聞、X 發言、Truth Social 發言與白宮新聞稿
+   - 明確分析可能影響的股市領域，例如半導體/AI、能源、金融利率、國防、醫療、加密資產、台灣供應鏈
+   - 區分「直接政策訊號」與「媒體解讀/市場反應」
+
+7. 🔮 明日展望與操作建議
    - 基於數學模型的短期預測摘要
    - 明日盤前建議關注的關鍵點位與事件
 
@@ -160,7 +177,11 @@ def _build_prompt(all_results: dict, all_news: dict, market_sentiment: str, date
 ⚠️ 本分析完全基於技術指標與公開新聞，不構成投資建議，投資人需自行評估風險。"""
 
 
-def generate_gpt_report(all_results: dict, market_sentiment: str = "中性") -> Optional[str]:
+def generate_gpt_report(
+    all_results: dict,
+    market_sentiment: str = "中性",
+    trump_news: dict | None = None,
+) -> Optional[str]:
     """
     Call GPT-4o and return the HTML report string.
     Returns None if API key is not set or call fails.
@@ -174,11 +195,14 @@ def generate_gpt_report(all_results: dict, market_sentiment: str = "中性") -> 
 
     logger.info("Fetching Google News for report...")
     all_news = fetch_all_news()
+    if trump_news is None:
+        logger.info("Fetching TrumpNews for report...")
+        trump_news = fetch_trump_news()
 
     logger.info("Calling GPT-4o for report generation...")
     try:
         client = OpenAI(api_key=api_key)
-        prompt = _build_prompt(all_results, all_news, market_sentiment, date_str)
+        prompt = _build_prompt(all_results, all_news, market_sentiment, date_str, trump_news)
 
         response = client.chat.completions.create(
             model="gpt-4o",

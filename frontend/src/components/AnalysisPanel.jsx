@@ -63,6 +63,68 @@ function PredictionCard({ pred, label }) {
   )
 }
 
+function TrumpNewsReportSummary({ data }) {
+  if (!data?.impact && !data?.sections) return null
+  const impact = data.impact || {}
+  const themes = impact.themes || []
+  const sectors = impact.sectors || []
+  const sections = data.sections || {}
+  const latest = [
+    ...(sections.truth_posts || []).slice(0, 2),
+    ...(sections.white_house || []).slice(0, 2),
+    ...(sections.english_news || []).slice(0, 2),
+    ...(sections.x_posts || []).slice(0, 1),
+  ].slice(0, 7)
+
+  return (
+    <div>
+      <div className="text-sm font-semibold text-[#40C4FF] mb-2">TrumpNews 政策訊號</div>
+      <div className="bg-[#101214] border border-[#1E2833] rounded p-3 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] text-gray-500">整體判讀</span>
+          <span className="text-xs text-gray-200">{impact.overall || '目前未偵測到明確市場板塊衝擊訊號'}</span>
+        </div>
+
+        {themes.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+            {themes.slice(0, 4).map(theme => (
+              <div key={theme.id} className="bg-[#0A0D10] rounded px-2 py-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-white truncate">{theme.label}</span>
+                  <span className="text-[9px] text-[#FFA726] flex-shrink-0">{theme.bias}</span>
+                </div>
+                <div className="text-[9px] text-gray-500 mt-1">{(theme.sectors || []).slice(0, 4).join('、')}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {sectors.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {sectors.slice(0, 8).map(s => (
+              <span key={s.sector} className="text-[8px] px-1 rounded bg-[#172018] text-[#8BC34A]">
+                {s.sector}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {latest.length > 0 && (
+          <div className="space-y-1 pt-1 border-t border-[#1A1A1A]">
+            {latest.map(item => (
+              <a key={item.id || item.link} href={item.link} target="_blank" rel="noreferrer noopener"
+                className="flex items-start gap-2 text-[10px] hover:bg-[#151515] rounded px-1 py-0.5">
+                <span className="text-[#40C4FF] flex-shrink-0 w-20 truncate">{item.source}</span>
+                <span className="text-gray-400 line-clamp-1">{item.title || item.summary}</span>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── TW: 三大法人 panel ────────────────────────────────────────────────────────
 function InvestorsTW({ data }) {
   const trend = data.trend || []
@@ -439,6 +501,8 @@ function DailyReport() {
           ))}
         </div>
       </div>
+
+      <TrumpNewsReportSummary data={report.trump_news} />
 
       {/* All stock summaries */}
       {report.all_results && (
