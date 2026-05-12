@@ -126,6 +126,9 @@ function DisplayStockRow({ stock, isSelected, onClick, onDelete, depth, isDragga
       )}
       <div className="flex flex-col min-w-0 flex-1">
         <span className="text-[11px] text-gray-200 truncate">{stock.name}</span>
+        {stock.tags?.length > 0 && (
+          <span className="text-[9px] text-[#4A7A6A] truncate leading-tight">{stock.tags.join(' · ')}</span>
+        )}
         <span className="text-[9px] text-gray-600">{stock.symbol}</span>
       </div>
       <div className={`flex flex-col items-end flex-shrink-0 ml-1 ${priceColor}`}>
@@ -570,7 +573,8 @@ export default function WatchlistPanel({ onSelect, selectedSymbol, onNeedKey }) 
       const filtered = node.filter(s =>
         s.symbol.toLowerCase().includes(query) ||
         s.name.includes(query) ||
-        (s.name_en || '').toLowerCase().includes(query)
+        (s.name_en || '').toLowerCase().includes(query) ||
+        (s.tags || []).some(t => t.toLowerCase().includes(query))
       )
       return filtered.length > 0 ? filtered : null
     }
