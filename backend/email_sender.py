@@ -20,6 +20,80 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 logger = logging.getLogger(__name__)
 
 
+def _build_chip_section_html(all_results: dict) -> str:
+    """Build 三大法人/融資融券 summary HTML table from FinMind data in all_results."""
+    rows_buy, rows_sell = [], []
+    for symbol, result in all_results.items():
+        if result.get("error"):
+            continue
+        inv = result.get("investors", {})
+        if inv.get("type") != "tw":
+            continue
+        comp = inv.get("components", {})
+        total = comp.get("total_net", 0)
+        if total == 0:
+            continue
+        rows_buy.append({
+            "symbol":      symbol,
+            "name":        result.get("name", ""),
+            "foreign_net": comp.get("foreign_net", 0),
+            "trust_net":   comp.get("trust_net", 0),
+            "dealer_net":  comp.get("dealer_net", 0),
+            "total_net":   total,
+        })
+
+    rows_buy.sort(key=lambda x: x["total_net"], reverse=True)
+    top_buy  = rows_buy[:8]
+    top_sell = sorted(rows_buy, key=lambda x: x["total_net"])[:8]
+
+    def fmt(n):
+        color = "#26A69A" if n > 0 else ("#EF5350" if n < 0 else "#888")
+        sign  = "+" if n > 0 else ""
+        return f"<span style='color:{color}'>{sign}{n:,}</span>"
+
+    header = (
+        "<tr style='background:#0A1A2A;color:#888;font-size:12px'>"
+        "<th style='padding:4px 8px;text-align:left'>代號</th>"
+        "<th style='padding:4px 8px;text-align:left'>名稱</th>"
+        "<th style='padding:4px 8px;text-align:right'>外資</th>"
+        "<th style='padding:4px 8px;text-align:right'>投信</th>"
+        "<th style='padding:4px 8px;text-align:right'>自營</th>"
+        "<th style='padding:4px 8px;text-align:right'>合計</th>"
+        "</tr>"
+    )
+
+    def make_rows(lst):
+        return "".join(
+            f"<tr><td style='padding:4px 8px'>{r['symbol']}</td>"
+            f"<td style='padding:4px 8px'>{escape(r['name'])}</td>"
+            f"<td style='padding:4px 8px;text-align:right;font-family:monospace'>{fmt(r['foreign_net'])}</td>"
+            f"<td style='padding:4px 8px;text-align:right;font-family:monospace'>{fmt(r['trust_net'])}</td>"
+            f"<td style='padding:4px 8px;text-align:right;font-family:monospace'>{fmt(r['dealer_net'])}</td>"
+            f"<td style='padding:4px 8px;text-align:right;font-family:monospace'><strong>{fmt(r['total_net'])}</strong></td>"
+            "</tr>"
+            for r in lst
+        )
+
+    if not top_buy and not top_sell:
+        return ""
+
+    buy_table = (
+        "<h3 style='color:#26A69A;margin-top:16px'>▲ 三大法人買超 TOP 8（股數）</h3>"
+        f"<table style='border-collapse:collapse;width:100%'>{header}{make_rows(top_buy)}</table>"
+        if top_buy else ""
+    )
+    sell_table = (
+        "<h3 style='color:#EF5350;margin-top:16px'>▼ 三大法人賣超 TOP 8（股數）</h3>"
+        f"<table style='border-collapse:collapse;width:100%'>{header}{make_rows(top_sell)}</table>"
+        if top_sell else ""
+    )
+
+    return (
+        "<h2 style='color:#40C4FF;margin-top:24px'>🏢 三大法人動向（FinMind）</h2>"
+        + buy_table + sell_table
+    )
+
+
 def _build_fallback_html(daily_report: dict) -> str:
     """Generate a basic HTML report from technical data (used when GPT is unavailable)."""
     date = daily_report.get("date", datetime.now().strftime("%Y-%m-%d"))
@@ -29,6 +103,7 @@ def _build_fallback_html(daily_report: dict) -> str:
     sector = daily_report.get("sector_summary", {})
     trump_news = daily_report.get("trump_news", {})
     trump_impact = trump_news.get("impact", {}) if isinstance(trump_news, dict) else {}
+    all_results = daily_report.get("all_results", {})
 
     sentiment_color = "#26A69A" if sentiment == "多頭" else ("#EF5350" if sentiment == "空頭" else "#FFA726")
 
@@ -81,6 +156,8 @@ def _build_fallback_html(daily_report: dict) -> str:
 <ul style="padding-left:18px">{trump_latest_rows}</ul>
 """
 
+    chip_section = _build_chip_section_html(all_results)
+
     return f"""
 <h2 style="color:#40C4FF">📊 量化技術分析報告（GPT分析未啟用）</h2>
 <p>市場情緒：<strong style="color:{sentiment_color};font-size:16px">{sentiment}</strong></p>
@@ -105,6 +182,8 @@ def _build_fallback_html(daily_report: dict) -> str:
   <th style="padding:4px 8px;text-align:left">板塊</th><th style="padding:4px 8px;text-align:left">情緒</th>
   <th style="padding:4px 8px;text-align:left">平均評分</th>
 </tr>{sector_rows}</table>
+
+{chip_section}
 
 {trump_block}
 """

@@ -119,55 +119,111 @@ def _build_analysis_section(all_results: dict) -> str:
 
 
 def _build_institution_analysis_section(all_results: dict) -> str:
-    """Build institutional trading analysis section for GPT prompt."""
-    lines = ["\n【三大法人與主力分析】"]
-    
-    # Collect institutional data from all results
-    major_activities = []
-    
+    """Build institutional trading analysis section for GPT prompt.
+    Reads from result['investors'] (FinMind actual data) and
+    result['institutional_analysis'] (chip_analysis inference).
+    """
+    lines = ["\n【三大法人與主力分析（FinMind 實際數據）】"]
+
+    # ── 1. Collect actual FinMind chip data ───────────────────────────────────
+    tw_chip = []   # TW stocks with real 三大法人 data
+    for symbol, result in all_results.items():
+        if result.get("error"):
+            continue
+        inv = result.get("investors", {})
+        if inv.get("type") != "tw":
+            continue
+        comp = inv.get("components", {})
+        total_net = comp.get("total_net", 0)
+        if total_net == 0:
+            continue
+        tw_chip.append({
+            "symbol":      symbol,
+            "name":        result.get("name", ""),
+            "foreign_net": comp.get("foreign_net", 0),
+            "trust_net":   comp.get("trust_net", 0),
+            "dealer_net":  comp.get("dealer_net", 0),
+            "total_net":   total_net,
+            "latest_date": inv.get("latest_date", ""),
+            "trend":       inv.get("trend", []),
+        })
+
+    # Sort by abs(total_net) so biggest movers appear first
+    tw_chip.sort(key=lambda x: abs(x["total_net"]), reverse=True)
+
+    if tw_chip:
+        # Split buy / sell top lists
+        top_buy  = [x for x in tw_chip if x["total_net"] > 0][:8]
+        top_sell = [x for x in tw_chip if x["total_net"] < 0][:8]
+
+        if top_buy:
+            lines.append("\n▲ 三大法人合計買超前 8（股數）：")
+            for i, s in enumerate(top_buy, 1):
+                lines.append(
+                    f"  {i}. {s['symbol']} {s['name']}  "
+                    f"合計+{s['total_net']:,}  "
+                    f"外資{s['foreign_net']:+,} 投信{s['trust_net']:+,} 自營{s['dealer_net']:+,}  "
+                    f"[{s['latest_date']}]"
+                )
+
+        if top_sell:
+            lines.append("\n▼ 三大法人合計賣超前 8（股數）：")
+            for i, s in enumerate(top_sell, 1):
+                lines.append(
+                    f"  {i}. {s['symbol']} {s['name']}  "
+                    f"合計{s['total_net']:,}  "
+                    f"外資{s['foreign_net']:+,} 投信{s['trust_net']:+,} 自營{s['dealer_net']:+,}  "
+                    f"[{s['latest_date']}]"
+                )
+
+        # Continuous-buy / continuous-sell (≥3 of 5 trend days same direction)
+        persistent_buy, persistent_sell = [], []
+        for s in tw_chip:
+            trend = s.get("trend", [])
+            if len(trend) >= 3:
+                nets = [t.get("total_net", 0) for t in trend[:5]]
+                buy_days  = sum(1 for n in nets if n > 0)
+                sell_days = sum(1 for n in nets if n < 0)
+                cum = sum(nets)
+                if buy_days >= 3 and cum > 0:
+                    persistent_buy.append((s["symbol"], s["name"], cum, buy_days))
+                elif sell_days >= 3 and cum < 0:
+                    persistent_sell.append((s["symbol"], s["name"], cum, sell_days))
+        if persistent_buy:
+            persistent_buy.sort(key=lambda x: x[2], reverse=True)
+            lines.append("\n📈 持續買超（近5日中≥3日買超）：")
+            for sym, nm, cum, days in persistent_buy[:5]:
+                lines.append(f"  {sym} {nm}  近5日累計{cum:+,}股 ({days}日買超)")
+        if persistent_sell:
+            persistent_sell.sort(key=lambda x: x[2])
+            lines.append("\n📉 持續賣超（近5日中≥3日賣超）：")
+            for sym, nm, cum, days in persistent_sell[:5]:
+                lines.append(f"  {sym} {nm}  近5日累計{cum:+,}股 ({days}日賣超)")
+    else:
+        lines.append("（今日尚無台股三大法人 FinMind 數據）")
+
+    # ── 2. Supplement with chip_analysis inference (likely institutions) ───────
+    inferred = []
     for symbol, result in all_results.items():
         if result.get("error") or not result.get("institutional_analysis"):
             continue
-        
         inst = result["institutional_analysis"]
-        
-        # Add to major activities if there's significant buying/selling
         for buyer in inst.get("likely_buyers", []):
-            if buyer.get("amount", 0) > 0:
-                major_activities.append({
-                    "symbol": symbol,
-                    "name": result.get("name", ""),
-                    "type": "買超",
-                    "institution": buyer.get("type", ""),
-                    "amount": buyer.get("amount", 0),
-                    "likely_institutions": buyer.get("likely_institutions", []),
-                })
-        
+            if buyer.get("amount", 0) > 0 and buyer.get("likely_institutions"):
+                inferred.append(
+                    f"  {symbol} {result.get('name','')} — "
+                    f"推測 {'、'.join(buyer['likely_institutions'][:2])} 買進"
+                )
         for seller in inst.get("likely_sellers", []):
-            if seller.get("amount", 0) < 0:
-                major_activities.append({
-                    "symbol": symbol,
-                    "name": result.get("name", ""),
-                    "type": "賣超",
-                    "institution": seller.get("type", ""),
-                    "amount": abs(seller.get("amount", 0)),
-                    "likely_institutions": [],
-                })
-    
-    # Sort by amount and display top activities
-    major_activities.sort(key=lambda x: x["amount"], reverse=True)
-    
-    if not major_activities:
-        lines.append("尚無明顯機構活動。")
-    else:
-        lines.append("\n今日三大法人重點活動：")
-        for i, activity in enumerate(major_activities[:10], 1):
-            inst_names = "（" + "、".join(activity.get("likely_institutions", [])[:2]) + "）" if activity.get("likely_institutions") else ""
-            lines.append(
-                f"  {i}. {activity['symbol']} {activity['name']}: "
-                f"{activity['institution']}{activity['type']} {activity['amount']:,}股 {inst_names}"
-            )
-    
+            if seller.get("amount", 0) < 0 and seller.get("likely_institutions"):
+                inferred.append(
+                    f"  {symbol} {result.get('name','')} — "
+                    f"推測 {'、'.join(seller.get('likely_institutions', [])[:2])} 賣出"
+                )
+    if inferred:
+        lines.append("\n🔍 主力機構推測（chip_analysis）：")
+        lines.extend(inferred[:8])
+
     return "\n".join(lines)
 
 
