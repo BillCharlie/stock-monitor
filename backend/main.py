@@ -677,7 +677,7 @@ def test_quotes(symbols: str = Query(..., description="逗號分隔代號，如 
         # ── TWSE probe (only for .TW) ─────────────────────────────────────────
         if s.upper().endswith(".TW"):
             code = s.split(".")[0]
-            date_str = datetime.now().replace(day=1).strftime("%Y%m%d")
+            date_str = datetime.now().strftime("%Y%m%d")  # today, not first-of-month
             try:
                 r = _req.get(
                     "https://www.twse.com.tw/exchangeReport/STOCK_DAY",

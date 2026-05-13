@@ -172,17 +172,71 @@ def _get_tw_stock_from_twse_api(symbol: str, months: int = 60) -> pd.DataFrame:
     return df
 
 
+def _get_tw_mis_quote(symbol: str) -> dict | None:
+    """
+    Fetch real-time quote from TWSE MIS API (works during and after market hours).
+    Tries tse (TWSE) first, then otc (TPEX) automatically.
+    Returns None if both fail or price field is '-'.
+    """
+    raw_code = symbol.split(".")[0]
+    suffix   = symbol.upper().rsplit(".", 1)[-1]
+    exchanges = ["otc"] if suffix == "TWO" else ["tse", "otc"]
+
+    for ex in exchanges:
+        try:
+            resp = requests.get(
+                "https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
+                params={"ex_ch": f"{ex}_{raw_code}.tw", "json": "1", "delay": "0"},
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://mis.twse.com.tw/"},
+                timeout=8, verify=False,
+            )
+            items = resp.json().get("msgArray", [])
+            if not items:
+                continue
+            item = items[0]
+            z = item.get("z", "-")   # last/current price
+            y = item.get("y", "-")   # yesterday close
+            v = item.get("v", "0")   # volume
+
+            # After close, z may be "-"; fall back to closing price field "z" from y
+            price_str = z if z and z != "-" else item.get("pz", "-")
+            if not price_str or price_str == "-":
+                continue
+
+            close    = float(price_str)
+            prev_c   = float(y) if y and y != "-" else close
+            change   = close - prev_c
+            vol      = int(float(v)) if v and v not in ("-", "") else 0
+            logger.info("MIS quote OK for %s (%s): %.2f", symbol, ex, close)
+            return {
+                "price":      round(close, 4),
+                "change":     round(change, 4),
+                "change_pct": round(change / prev_c * 100, 2) if prev_c else 0,
+                "volume":     vol,
+            }
+        except Exception as e:
+            logger.debug("MIS API error %s (%s): %s", symbol, ex, e)
+
+    return None
+
+
 def _get_tw_quote_from_twse(symbol: str) -> dict | None:
     """
-    Fallback: fetch latest close/change from TWSE (TWSE listed) or TPEX (OTC).
-    Uses the month endpoint and grabs the last row — 1 request only.
+    Fallback: fetch latest close from TWSE/TPEX monthly data.
+    BUG FIX: use today's actual date (not replace(day=1)) so we never
+    land on a public holiday like 勞動節 May 1.
+    Tries current month first, then previous month.
     """
     raw_code = symbol.split(".")[0]
     suffix   = symbol.upper().rsplit(".", 1)[-1]
 
     cur = datetime.now()
-    for _ in range(3):   # try current month, then go back
+    for _ in range(3):
         try:
+            # Use today's date (not first-of-month) — TWSE returns whole-month data
+            # regardless of which day within the month you send.
+            date_str = cur.strftime("%Y%m%d")
+
             if suffix == "TWO":
                 roc_year   = cur.year - 1911
                 date_param = f"{roc_year}/{cur.month:02d}"
@@ -190,42 +244,41 @@ def _get_tw_quote_from_twse(symbol: str) -> dict | None:
                 params = {"d": date_param, "stkno": raw_code, "o": "json"}
                 resp   = requests.get(url, params=params,
                                       headers={"User-Agent": "Mozilla/5.0"},
-                                      timeout=8, verify=False)
+                                      timeout=10, verify=False)
                 data   = resp.json()
                 rows   = data.get("aaData") or data.get("data") or []
                 if rows:
-                    latest    = rows[-1]
-                    close     = float(str(latest[7]).replace(",", ""))
-                    prev_c    = float(str(rows[-2][7]).replace(",", "")) if len(rows) > 1 else close
-                    volume    = int(str(latest[1]).replace(",", ""))
-                    change    = close - prev_c
-                    return {"price": round(close, 4),
-                            "change": round(change, 4),
+                    latest = rows[-1]
+                    close  = float(str(latest[7]).replace(",", ""))
+                    prev_c = float(str(rows[-2][7]).replace(",", "")) if len(rows) > 1 else close
+                    vol    = int(str(latest[1]).replace(",", ""))
+                    change = close - prev_c
+                    return {"price": round(close, 4), "change": round(change, 4),
                             "change_pct": round(change / prev_c * 100, 2) if prev_c else 0,
-                            "volume": volume}
+                            "volume": vol}
             else:
-                date_str = cur.replace(day=1).strftime("%Y%m%d")
                 url    = "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
                 params = {"response": "json", "date": date_str, "stockNo": raw_code}
                 resp   = requests.get(url, params=params,
                                       headers={"User-Agent": "Mozilla/5.0"},
-                                      timeout=8, verify=False)
+                                      timeout=10, verify=False)
                 data   = resp.json()
                 if data.get("stat") in ("OK", "ok") and data.get("data"):
                     rows   = data["data"]
                     latest = rows[-1]
                     close  = float(str(latest[6]).replace(",", ""))
                     prev_c = float(str(rows[-2][6]).replace(",", "")) if len(rows) > 1 else close
-                    volume = int(str(latest[1]).replace(",", ""))
+                    vol    = int(str(latest[1]).replace(",", ""))
                     change = close - prev_c
-                    return {"price": round(close, 4),
-                            "change": round(change, 4),
+                    return {"price": round(close, 4), "change": round(change, 4),
                             "change_pct": round(change / prev_c * 100, 2) if prev_c else 0,
-                            "volume": volume}
+                            "volume": vol}
+
         except Exception as e:
             logger.debug("TWSE/TPEX quote error %s: %s", symbol, e)
 
-        cur = (cur.replace(day=1) - timedelta(days=1))
+        # Step back ~1 month
+        cur = cur - timedelta(days=30)
 
     return None
 
@@ -294,10 +347,32 @@ def get_quote(symbol: str) -> dict:
     """
     Get latest price and change info.
     Priority:
-      1. yfinance history(5d)  — reliable close price for both TW and US
-      2. TWSE/TPEX REST API    — fallback for Taiwan stocks
+      Taiwan stocks (.TW / .TWO):
+        1. TWSE MIS real-time API  — fastest, works in/after market hours
+        2. TWSE/TPEX monthly data  — reliable fallback (today's date, not May 1)
+        3. yfinance                — last resort (rate-limited on Railway)
+      US / other stocks:
+        1. yfinance history(5d)
     """
-    # ── Step 1: yfinance history (more reliable than fast_info for TW stocks) ─
+    upper = symbol.upper()
+    is_tw = upper.endswith(".TW") or upper.endswith(".TWO")
+
+    if is_tw:
+        # ── TW Step 1: MIS real-time ─────────────────────────────────────────
+        q = _get_tw_mis_quote(symbol)
+        if q:
+            return q
+
+        # ── TW Step 2: TWSE/TPEX monthly (fixed date) ───────────────────────
+        logger.info("MIS failed for %s, trying TWSE monthly...", symbol)
+        q = _get_tw_quote_from_twse(symbol)
+        if q:
+            return q
+
+        # ── TW Step 3: yfinance ──────────────────────────────────────────────
+        logger.info("TWSE failed for %s, trying yfinance...", symbol)
+
+    # US stocks (and TW fallback)
     try:
         t  = yf.Ticker(symbol)
         df = t.history(period="5d", interval="1d", auto_adjust=True, actions=False)
@@ -317,14 +392,6 @@ def get_quote(symbol: str) -> dict:
         logger.warning("yfinance history empty for %s", symbol)
     except Exception as e:
         logger.warning("yfinance quote failed for %s: %s", symbol, e)
-
-    # ── Step 2: TWSE/TPEX fallback for Taiwan stocks ──────────────────────────
-    upper = symbol.upper()
-    if upper.endswith(".TW") or upper.endswith(".TWO"):
-        logger.info("TWSE/TPEX fallback quote for %s", symbol)
-        tw_quote = _get_tw_quote_from_twse(symbol)
-        if tw_quote:
-            return tw_quote
 
     return {}
 
