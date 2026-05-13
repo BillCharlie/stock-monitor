@@ -55,13 +55,13 @@ function fmtDate(value) {
   return value
 }
 
-function SvgPieChart({ slices, size = 220 }) {
+function SvgPieChart({ slices, size = 340, onSliceClick = null, activeSector = '' }) {
   const total = slices.reduce((sum, s) => sum + s.value, 0)
   if (!total) return null
 
   const cx = size / 2
   const cy = size / 2
-  const radius = size * 0.42
+  const radius = size * 0.40
   let angle = -Math.PI / 2
 
   const paths = slices.filter(s => s.value > 0).map(slice => {
@@ -78,15 +78,43 @@ function SvgPieChart({ slices, size = 220 }) {
   })
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="block">
+    <svg 
+      width={size} 
+      height={size} 
+      viewBox={`0 0 ${size} ${size}`} 
+      className="block cursor-pointer"
+      style={{ filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.3))' }}
+    >
       {paths.map((p, index) => (
-        <path key={`${p.label}-${index}`} d={p.d} fill={p.color} stroke="#0A0A0A" strokeWidth="1.5">
-          <title>{p.label}: {fmt(p.pct)}%</title>
-        </path>
+        <g key={`${p.label}-${index}`} onClick={() => onSliceClick?.(p.label)}>
+          <path 
+            d={p.d} 
+            fill={p.color} 
+            stroke={activeSector === p.label ? '#FFF' : '#0A0A0A'} 
+            strokeWidth={activeSector === p.label ? '2.5' : '1.5'}
+            opacity={activeSector && activeSector !== p.label ? 0.5 : 1}
+            className="transition-all hover:opacity-100"
+            style={{ cursor: 'pointer' }}
+          >
+            <title>{p.label}: {fmt(p.pct)}%</title>
+          </path>
+          {p.pct > 5 && (
+            <text
+              x={cx + (radius * 0.65) * Math.cos(angle + (paths.indexOf(p) === 0 ? (span / 2) : 0))}
+              y={cy + (radius * 0.65) * Math.sin(angle + (paths.indexOf(p) === 0 ? (span / 2) : 0))}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              className="text-[11px] font-bold fill-white pointer-events-none"
+              style={{ textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}
+            >
+              {fmt(p.pct, 1)}%
+            </text>
+          )}
+        </g>
       ))}
-      <circle cx={cx} cy={cy} r={size * 0.22} fill="#0A0A0A" stroke="#1E2833" strokeWidth="1" />
-      <text x={cx} y={cy - 4} textAnchor="middle" className="fill-gray-300 text-[13px] font-semibold">產業</text>
-      <text x={cx} y={cy + 13} textAnchor="middle" className="fill-gray-600 text-[10px]">ETF彙整</text>
+      <circle cx={cx} cy={cy} r={size * 0.18} fill="#0A0A0A" stroke="#1E2833" strokeWidth="1" />
+      <text x={cx} y={cy - 6} textAnchor="middle" className="fill-gray-200 text-[14px] font-semibold">產業</text>
+      <text x={cx} y={cy + 10} textAnchor="middle" className="fill-gray-600 text-[11px]">配置分佈</text>
     </svg>
   )
 }
@@ -262,135 +290,127 @@ export default function ActiveEtfPanel() {
       )}
 
       {model.sectors.length > 0 && (
-        <div className="flex-1 min-h-0 grid grid-cols-1 xl:grid-cols-[320px_1fr]">
+        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_minmax(500px,1.2fr)]">
           <div className="min-h-0 border-r border-[#1A1A1A] bg-[#0B0D0F] flex flex-col">
             <div className="px-4 py-3 border-b border-[#1A1A1A]">
-              <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="text-xs font-semibold text-blue-400 mb-2">📊 點擊圖表選擇產業</div>
+              <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
                 <div>
-                  <div className="text-lg font-semibold text-white">{model.stockEtfCount}</div>
-                  <div className="text-[9px] text-gray-600">股票型ETF</div>
+                  <div className="text-sm font-semibold text-white">{model.stockEtfCount}</div>
+                  <div className="text-gray-600">股票型ETF</div>
                 </div>
                 <div>
-                  <div className="text-lg font-semibold text-white">{model.sectors.length}</div>
-                  <div className="text-[9px] text-gray-600">產業</div>
+                  <div className="text-sm font-semibold text-white">{model.sectors.length}</div>
+                  <div className="text-gray-600">產業類別</div>
                 </div>
                 <div>
-                  <div className="text-lg font-semibold text-white">{model.totalPositions}</div>
-                  <div className="text-[9px] text-gray-600">持股列數</div>
+                  <div className="text-sm font-semibold text-white">{model.totalPositions}</div>
+                  <div className="text-gray-600">持股數</div>
                 </div>
               </div>
             </div>
 
-            <div className="px-4 py-3 flex justify-center border-b border-[#1A1A1A]">
-              <SvgPieChart slices={pieSlices} />
+            <div className="flex-shrink-0 px-2 py-3 flex justify-center border-b border-[#1A1A1A] bg-[#08090B]">
+              <SvgPieChart 
+                slices={pieSlices} 
+                size={300}
+                activeSector={activeSector}
+                onSliceClick={setActiveSector}
+              />
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto">
+              <div className="px-3 py-2 text-[10px] text-gray-600 sticky top-0 bg-[#0B0D0F] border-b border-[#1A1A1A]">
+                產業列表 ({model.sectors.length})
+              </div>
               {model.sectors.map(s => (
                 <button
                   key={s.name}
                   onClick={() => setActiveSector(s.name)}
-                  className={`w-full px-3 py-2 border-b border-[#111] text-left hover:bg-[#121820] ${
-                    activeSector === s.name ? 'bg-[#101820]' : ''
+                  className={`w-full px-3 py-2 border-b border-[#111] text-left transition-colors ${
+                    activeSector === s.name 
+                      ? 'bg-[#1a2a38] border-l-2 border-l-cyan-400' 
+                      : 'hover:bg-[#0f1419]'
                   }`}
                 >
                   <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: s.color }} />
-                    <span className="text-[11px] text-gray-100 truncate">{s.name}</span>
-                    <span className="ml-auto text-[10px] font-mono text-gray-400">{fmt(s.pct)}%</span>
+                    <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: s.color }} />
+                    <span className="text-[10px] text-gray-100 flex-1 truncate font-medium">{s.name}</span>
+                    <span className="text-[10px] font-mono text-orange-400">{fmt(s.pct, 1)}%</span>
                   </div>
-                  <div className="mt-1 flex items-center gap-2 text-[9px] text-gray-600">
-                    <span>{s.etfCount} 檔ETF</span>
-                    <span>{s.stocks.length} 檔成分</span>
-                    <span className="ml-auto">{fmt(s.totalWeight, 2)} 權重</span>
+                  <div className="mt-1.5 flex items-center gap-1 text-[9px] text-gray-500">
+                    <span className="flex-1">
+                      {s.etfCount} ETF · {s.stocks.length} 檔成分
+                    </span>
+                    <span className="font-mono">{fmt(s.totalWeight, 1)}</span>
                   </div>
-                  <div className="mt-1 h-1.5 bg-[#1A1A1A] rounded overflow-hidden">
-                    <div className="h-full rounded" style={{ width: `${Math.min(100, s.pct)}%`, backgroundColor: s.color }} />
+                  <div className="mt-1.5 h-1 bg-[#1A1A1A] rounded-full overflow-hidden">
+                    <div 
+                      className="h-full rounded-full transition-all" 
+                      style={{ 
+                        width: `${Math.min(100, s.pct)}%`, 
+                        backgroundColor: s.color,
+                        opacity: activeSector === s.name ? 1 : 0.7
+                      }} 
+                    />
                   </div>
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="min-h-0 overflow-y-auto">
-            <div className="px-4 py-3 border-b border-[#1A1A1A] bg-[#0D0D0D]">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: sector.color }} />
-                <span className="text-base font-semibold text-white">{sector.name}</span>
-                <span className="text-[10px] text-gray-600">
-                  {sector.etfCount} 檔ETF持有，{sector.stocks.length} 檔成分，彙整占比 {fmt(sector.pct)}%
-                </span>
+          <div className="min-h-0 overflow-y-auto flex flex-col">
+            <div className="flex-shrink-0 px-4 py-3 border-b border-[#1A1A1A] bg-[#0D0D0D] sticky top-0 z-20">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="w-4 h-4 rounded" style={{ backgroundColor: sector.color }} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-base font-semibold text-white">{sector.name}</div>
+                  <div className="text-[9px] text-gray-500 mt-0.5">
+                    {sector.etfCount} 檔ETF · {sector.stocks.length} 檔成分股 · 彙整占比 <span className="text-orange-400 font-mono">{fmt(sector.pct, 1)}%</span>
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 2xl:grid-cols-[1fr_360px] min-h-0">
-              <div className="min-w-0">
-                <div className="sticky top-0 z-10 grid grid-cols-[54px_minmax(120px,1fr)_90px_110px_minmax(180px,1.4fr)] gap-2 px-4 py-2 bg-[#101214] border-b border-[#1A1A1A] text-[10px] text-gray-600">
-                  <span>代號</span>
-                  <span>公司</span>
-                  <span className="text-right">累計占比</span>
-                  <span className="text-right">ETF數</span>
-                  <span>各ETF占比</span>
-                </div>
-                {sector.stocks.map(stock => (
+            <div className="flex-1 min-h-0 overflow-x-auto">
+              <div className="sticky top-0 z-10 grid grid-cols-[60px_minmax(140px,1fr)_90px_80px_1fr] gap-3 px-4 py-2 bg-[#101214] border-b border-[#1A1A1A] text-[10px] font-semibold text-gray-500 top-[70px]">
+                <div>代號</div>
+                <div>公司名稱</div>
+                <div className="text-right">累計占比</div>
+                <div className="text-right">ETF數</div>
+                <div>各ETF占比</div>
+              </div>
+              <div className="divide-y divide-[#111]">
+                {sector.stocks.map((stock, idx) => (
                   <div
                     key={stock.code}
-                    className="grid grid-cols-[54px_minmax(120px,1fr)_90px_110px_minmax(180px,1.4fr)] gap-2 px-4 py-2 border-b border-[#111] hover:bg-[#101214] text-[11px]"
+                    className={`grid grid-cols-[60px_minmax(140px,1fr)_90px_80px_1fr] gap-3 px-4 py-2.5 text-[10px] transition-colors ${
+                      idx % 2 === 0 ? 'bg-[#0A0D0F]' : 'bg-[#060809]'
+                    } hover:bg-[#0f1620]`}
                   >
-                    <span className="font-mono text-[#40C4FF]">{stock.code}</span>
-                    <span className="truncate text-gray-200">{stock.name}</span>
-                    <span className="font-mono text-[#FFA726] text-right">{fmt(stock.totalWeight, 2)}%</span>
-                    <span className="text-right text-gray-500">{stock.etfs.length}</span>
-                    <span className="flex flex-wrap gap-1">
+                    <div className="font-mono font-semibold text-cyan-400">{stock.code}</div>
+                    <div className="truncate text-gray-200 font-medium">{stock.name}</div>
+                    <div className="font-mono text-amber-500 text-right font-semibold">{fmt(stock.totalWeight, 2)}%</div>
+                    <div className="text-right text-gray-500">{stock.etfs.length}</div>
+                    <div className="flex flex-wrap gap-1.5">
                       {stock.etfs.map(etf => (
-                        <span
+                        <div
                           key={`${stock.code}-${etf.code}`}
-                          title={etf.name}
-                          className="text-[9px] px-1.5 py-0.5 rounded bg-[#111820] border border-[#1F2A36] text-gray-300"
+                          className="inline-block px-2 py-1 rounded text-[9px] bg-gradient-to-r from-[#0f1f2e] to-[#0a1218] border border-[#1a2f3f] text-gray-300 hover:border-cyan-500 transition-colors whitespace-nowrap"
+                          title={`${etf.name} (${fmt(etf.weight, 2)}%)`}
                         >
-                          {etf.code} {fmt(etf.weight, 2)}%
-                        </span>
+                          <span className="font-mono font-semibold text-cyan-300">{etf.code}</span>
+                          <span className="text-gray-600"> {fmt(etf.weight, 2)}%</span>
+                        </div>
                       ))}
-                    </span>
+                    </div>
                   </div>
                 ))}
               </div>
-
-              <div className="border-l border-[#1A1A1A] bg-[#0B0D0F]">
-                <div className="px-3 py-2 text-[11px] font-semibold text-gray-200 border-b border-[#1A1A1A]">
-                  ETF投資摘要
-                </div>
-                <div className="max-h-[520px] overflow-y-auto">
-                  {model.etfSummaries.map(etf => (
-                    <div key={etf.code} className="px-3 py-2 border-b border-[#111]">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-[11px] text-[#40C4FF]">{etf.code}</span>
-                        <span className="text-[11px] text-gray-200 truncate">{etf.name}</span>
-                        <span className="ml-auto text-[9px] text-gray-600">{fmtDate(etf.date)}</span>
-                      </div>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {etf.topSectors.map(s => (
-                          <span key={`${etf.code}-${s.name}`} className="text-[9px] text-gray-500">
-                            {s.name} {fmt(s.weight, 1)}%
-                          </span>
-                        ))}
-                      </div>
-                      <div className="mt-1 text-[9px] text-gray-700">
-                        前五大：{etf.topHoldings.map(h => `${h.stock_code || h.stock_name} ${fmt(h.weight_pct, 1)}%`).join(' / ')}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                {model.errors.length > 0 && (
-                  <div className="px-3 py-2 border-t border-[#1A1A1A] text-[9px] text-yellow-600">
-                    {model.errors.length} 檔ETF暫時無法載入，已排除於彙整。
-                  </div>
-                )}
-              </div>
             </div>
 
-            <div className="px-4 py-2 text-[10px] text-gray-700 border-t border-[#1A1A1A]">
-              彙整方式：將各股票型主動式ETF揭露的持股權重直接加總後換算比例，未依ETF規模加權。
+            <div className="flex-shrink-0 px-4 py-2 text-[9px] text-gray-700 border-t border-[#1A1A1A] bg-[#080A0D]">
+              💡 共計 {sector.stocks.length} 檔成分股 · 累計權重 {fmt(sector.totalWeight, 2)} · 被 {sector.etfCount} 檔ETF持有
             </div>
           </div>
         </div>
