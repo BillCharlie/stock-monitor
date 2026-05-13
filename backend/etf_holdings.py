@@ -229,6 +229,123 @@ def _parse_holdings_df(df: pd.DataFrame) -> list[dict]:
     return holdings
 
 
+# ── Stock name & sector enrichment ───────────────────────────────────────────
+
+# Sub-category names that override their parent sector assignment
+_SECTOR_OVERRIDE: dict[str, str] = {
+    "鐵礦鋼鐵": "鋼鐵",
+}
+
+# Common TW stocks that may appear in ETF holdings but aren't in WATCHLIST
+_EXTRA_STOCKS: dict[str, tuple[str, str]] = {
+    # code: (name, sector)
+    "2882": ("中信金控",    "金融"),   "2886": ("兆豐金控",    "金融"),
+    "2884": ("玉山金控",    "金融"),   "2885": ("元大金控",    "金融"),
+    "2887": ("台新金控",    "金融"),   "2880": ("華南金控",    "金融"),
+    "2881": ("富邦金控",    "金融"),   "2883": ("開發金控",    "金融"),
+    "2892": ("第一金控",    "金融"),   "5880": ("合庫金控",    "金融"),
+    "5876": ("上海商銀",    "金融"),   "2834": ("臺企銀",      "金融"),
+    "2801": ("彰化銀行",    "金融"),   "2820": ("華票",        "金融"),
+    "4904": ("遠傳電信",    "電信"),   "3045": ("台灣大哥大",  "電信"),
+    "2412": ("中華電信",    "電信"),
+    "2603": ("長榮海運",    "航運"),   "2609": ("陽明海運",    "航運"),
+    "2615": ("萬海航運",    "航運"),   "2618": ("長榮航空",    "航運"),
+    "2610": ("華航",        "航運"),
+    "1301": ("台塑",        "化工/塑化"), "1303": ("南亞塑膠",  "化工/塑化"),
+    "1326": ("台化",        "化工/塑化"), "6505": ("台塑化",    "化工/塑化"),
+    "1402": ("遠東新",      "紡織"),   "1216": ("統一企業",    "食品"),
+    "1101": ("台泥",        "水泥"),   "1102": ("亞泥",        "水泥"),
+    "2207": ("和泰車",      "汽車"),   "2204": ("中華汽車",    "汽車"),
+    "2912": ("統一超商",    "零售"),   "5903": ("全家便利",    "零售"),
+    "2915": ("潤泰全",      "零售"),
+    "4174": ("浩鼎生技",    "生技醫療"), "6446": ("藥華藥",    "生技醫療"),
+    "3481": ("颀邦科技",    "半導體"), "3008": ("大立光",      "光學"),
+    "2049": ("上銀科技",    "機械"),   "1590": ("亞德客-KY",  "機械"),
+    "6213": ("聯茂電子",    "PCB"),    "2474": ("可成科技",   "科技系統廠"),
+    "2633": ("台灣高鐵",    "交通"),   "9933": ("中鼎工程",   "建設"),
+    "5534": ("長虹建設",    "建設"),
+    "2382": ("廣達電腦",    "科技系統廠"), "2317": ("鴻海精密", "科技系統廠"),
+    "2324": ("仁寶電腦",    "科技系統廠"), "2356": ("英業達",   "科技系統廠"),
+    "4938": ("和碩",        "科技系統廠"), "3231": ("緯創資通", "科技系統廠"),
+    "6669": ("緯穎科技",    "科技系統廠"), "2354": ("鴻準精密", "科技系統廠"),
+}
+
+_name_map_cache:   dict | None = None
+_sector_map_cache: dict | None = None
+
+
+def _build_stock_maps() -> tuple[dict[str, str], dict[str, str]]:
+    """Build (code→name, code→sector) from WATCHLIST + _EXTRA_STOCKS."""
+    name_map:   dict[str, str] = {}
+    sector_map: dict[str, str] = {}
+
+    try:
+        from watchlist import WATCHLIST  # local import avoids circular deps at module level
+
+        def _strip(sym: str) -> str:
+            return re.sub(r"\.(TWO?)$", "", sym, flags=re.IGNORECASE)
+
+        def _walk(node, depth: int, sector: str) -> None:
+            if isinstance(node, list):
+                for item in node:
+                    code = _strip(item.get("symbol", ""))
+                    name = item.get("name", "")
+                    if code:
+                        name_map.setdefault(code, name)
+                        sector_map.setdefault(code, sector or "其他")
+            elif isinstance(node, dict):
+                for key, val in node.items():
+                    if depth <= 0:
+                        # depth=0: root keys "台灣"/"美國" — don't use as sector
+                        _walk(val, 1, sector)
+                    elif depth == 1:
+                        # depth=1: country-level keys ARE the sectors ("半導體", "科技系統廠"…)
+                        new_sec = _SECTOR_OVERRIDE.get(key, key)
+                        _walk(val, 2, new_sec)
+                    else:
+                        # Deeper: inherit parent sector, with optional override
+                        new_sec = _SECTOR_OVERRIDE.get(key, sector)
+                        _walk(val, depth + 1, new_sec)
+
+        _walk(WATCHLIST, 0, "")
+    except Exception as e:
+        logger.warning("WATCHLIST stock-map build failed: %s", e)
+
+    # Supplement with extra stocks (don't override WATCHLIST entries)
+    for code, (name, sector) in _EXTRA_STOCKS.items():
+        name_map.setdefault(code, name)
+        sector_map.setdefault(code, sector)
+
+    return name_map, sector_map
+
+
+def _get_stock_maps() -> tuple[dict[str, str], dict[str, str]]:
+    """Return cached maps, building on first call."""
+    global _name_map_cache, _sector_map_cache
+    if _name_map_cache is None:
+        _name_map_cache, _sector_map_cache = _build_stock_maps()
+    return _name_map_cache, _sector_map_cache  # type: ignore[return-value]
+
+
+def _enrich_holdings(holdings: list[dict]) -> list[dict]:
+    """
+    Enrich each holding:
+      - Replace garbled / digit-only stock_name with proper Chinese name from maps
+      - Add 'sector' field
+    """
+    nm, sm = _get_stock_maps()
+    enriched = []
+    for h in holdings:
+        code = h.get("stock_code", "")
+        name = h.get("stock_name", "")
+        # If name has no Chinese characters, look up the proper name
+        if code and not re.search(r"[一-鿿]", name):
+            name = nm.get(code, name)
+        sector = sm.get(code, "其他") if code else "其他"
+        enriched.append({**h, "stock_name": name, "sector": sector})
+    return enriched
+
+
 # ── MoneyDJ scraper (primary) ─────────────────────────────────────────────────
 
 def _moneydj_url(code: str) -> str:
@@ -428,6 +545,9 @@ def fetch_etf_holdings(etf_code: str, force_refresh: bool = False) -> dict:
         if age < HOLDINGS_CACHE_TTL:
             cached = _load_json(curr_p)
             if cached.get("holdings") or cached.get("error"):
+                if cached.get("holdings"):
+                    # Re-enrich on every cache-read so sector/name fixes apply immediately
+                    cached["holdings"] = _enrich_holdings(cached["holdings"])
                 return cached
 
     name     = ACTIVE_ETFS.get(code_upper, code_upper)
@@ -454,19 +574,37 @@ def fetch_etf_holdings(etf_code: str, force_refresh: bool = False) -> dict:
         _save_json(curr_p, result)
         return result
 
+    # ── Enrich names + add sector field ──────────────────────────────────────
+    holdings = _enrich_holdings(holdings)
+
     # ── Compute top-10 weight ─────────────────────────────────────────────────
     weighted = [h for h in holdings if h.get("weight_pct") is not None]
     top10_w  = round(sum(h["weight_pct"] for h in weighted[:10]), 2) if weighted else None
 
+    # ── Sector breakdown ──────────────────────────────────────────────────────
+    sector_bd: dict[str, dict] = {}
+    for h in holdings:
+        sec = h.get("sector", "其他")
+        if sec not in sector_bd:
+            sector_bd[sec] = {"count": 0, "total_weight": 0.0}
+        sector_bd[sec]["count"] += 1
+        sector_bd[sec]["total_weight"] = round(
+            sector_bd[sec]["total_weight"] + (h.get("weight_pct") or 0), 4
+        )
+    sector_breakdown = dict(
+        sorted(sector_bd.items(), key=lambda x: -x[1]["total_weight"])
+    )
+
     result = {
-        "code":           code_upper,
-        "name":           name,
-        "type":           etf_type,
-        "date":           date_str,
-        "holdings":       holdings,
-        "top10_weight":   top10_w,
-        "total_holdings": len(holdings),
-        "fetched_at":     datetime.now().isoformat(),
+        "code":             code_upper,
+        "name":             name,
+        "type":             etf_type,
+        "date":             date_str,
+        "holdings":         holdings,
+        "top10_weight":     top10_w,
+        "total_holdings":   len(holdings),
+        "fetched_at":       datetime.now().isoformat(),
+        "sector_breakdown": sector_breakdown,
     }
 
     # ── Snapshot rotation & change detection ─────────────────────────────────
@@ -499,7 +637,12 @@ def fetch_all_etf_holdings(force_refresh: bool = False) -> dict[str, dict]:
         if age < ALL_CACHE_TTL:
             try:
                 with open(all_cache, encoding="utf-8") as f:
-                    return json.load(f)
+                    cached_all = json.load(f)
+                # Re-enrich on read so sector/name fixes apply to cached data
+                for etf_data in cached_all.values():
+                    if etf_data.get("holdings"):
+                        etf_data["holdings"] = _enrich_holdings(etf_data["holdings"])
+                return cached_all
             except Exception:
                 pass
 

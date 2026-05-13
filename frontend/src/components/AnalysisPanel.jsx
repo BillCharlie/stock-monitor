@@ -513,6 +513,191 @@ const isActiveETF = (symbol) => {
   return /^\d{5}[AD]$/.test(u)
 }
 
+// ── Sector colours ────────────────────────────────────────────────────────────
+const SECTOR_COLORS = {
+  '半導體':     '#40C4FF',
+  '科技系統廠': '#26A69A',
+  '鋼鐵':       '#A1887F',
+  '資源':       '#FF9800',
+  '金融':       '#CE93D8',
+  '電信':       '#66BB6A',
+  '太陽能':     '#FFF176',
+  '化工/塑化':  '#FF7043',
+  '傳產':       '#90A4AE',
+  '航運':       '#4DD0E1',
+  '零售':       '#F48FB1',
+  '生技醫療':   '#B39DDB',
+  '光學':       '#80CBC4',
+  '機械':       '#A5D6A7',
+  '汽車':       '#FFCC80',
+  '水泥':       '#BCAAA4',
+  '食品':       '#E6EE9C',
+  'PCB':        '#80DEEA',
+  '紡織':       '#FFAB91',
+  '建設':       '#CFD8DC',
+  '交通':       '#B0BEC5',
+  '主動式ETF':  '#5C6BC0',
+  '其他':       '#37474F',
+}
+
+// ── SVG donut chart ───────────────────────────────────────────────────────────
+function SvgDonutChart({ slices, size = 140 }) {
+  const total = slices.reduce((s, x) => s + x.value, 0)
+  if (!total || !slices.length) return null
+  const cx = size / 2, cy = size / 2
+  const ro = size * 0.46, ri = size * 0.27
+
+  let angle = -Math.PI / 2
+  const arcs = slices.filter(s => s.value > 0).map(s => {
+    const span = (s.value / total) * 2 * Math.PI
+    const end  = angle + span
+    const ox1 = cx + ro * Math.cos(angle), oy1 = cy + ro * Math.sin(angle)
+    const ox2 = cx + ro * Math.cos(end),   oy2 = cy + ro * Math.sin(end)
+    const ix1 = cx + ri * Math.cos(end),   iy1 = cy + ri * Math.sin(end)
+    const ix2 = cx + ri * Math.cos(angle), iy2 = cy + ri * Math.sin(angle)
+    const large = span > Math.PI ? 1 : 0
+    const d = `M ${ox1} ${oy1} A ${ro} ${ro} 0 ${large} 1 ${ox2} ${oy2} ` +
+              `L ${ix1} ${iy1} A ${ri} ${ri} 0 ${large} 0 ${ix2} ${iy2} Z`
+    const pct = (s.value / total * 100).toFixed(1)
+    angle = end
+    return { ...s, d, pct }
+  })
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      {arcs.map((a, i) => (
+        <path key={i} d={a.d} fill={a.color} stroke="#0D0D0D" strokeWidth="1.5" opacity="0.92">
+          <title>{a.label}: {a.pct}%</title>
+        </path>
+      ))}
+    </svg>
+  )
+}
+
+// ── Active ETF sector overview (for DailyReport) ──────────────────────────────
+function EtfSectorOverview() {
+  const [allData, setAllData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    api.getAllEtfHoldings()
+      .then(setAllData)
+      .catch(() => setAllData(null))
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading) return (
+    <div className="text-[10px] text-gray-600 py-1">主動式ETF產業資料載入中...</div>
+  )
+  if (!allData) return null
+
+  // Aggregate sector weights across all stock-type (A) active ETFs
+  const sectorAgg = {}       // sector → cumulative weight
+  const sectorStocks = {}    // sector → { code → {name, totalWeight, etfCount} }
+
+  for (const [etfCode, etfData] of Object.entries(allData)) {
+    if (etfCode.endsWith('D')) continue   // skip bond ETFs
+    if (etfData.error || !etfData.holdings?.length) continue
+    for (const h of etfData.holdings) {
+      const sec = h.sector || '其他'
+      const w   = h.weight_pct || 0
+      sectorAgg[sec] = (sectorAgg[sec] || 0) + w
+      if (!sectorStocks[sec]) sectorStocks[sec] = {}
+      const code = h.stock_code || ''
+      if (code) {
+        if (!sectorStocks[sec][code]) {
+          sectorStocks[sec][code] = { name: h.stock_name || code, totalWeight: 0, etfCount: 0 }
+        }
+        sectorStocks[sec][code].totalWeight += w
+        sectorStocks[sec][code].etfCount++
+      }
+    }
+  }
+
+  const totalW = Object.values(sectorAgg).reduce((s, v) => s + v, 0)
+  if (!totalW) return null
+
+  const sectors = Object.entries(sectorAgg)
+    .sort(([, a], [, b]) => b - a)
+    .map(([name, weight]) => ({
+      name,
+      weight: +weight.toFixed(2),
+      pct:    +(weight / totalW * 100).toFixed(1),
+      color:  SECTOR_COLORS[name] || SECTOR_COLORS['其他'],
+      topStocks: Object.entries(sectorStocks[name] || {})
+        .sort(([, a], [, b]) => b.totalWeight - a.totalWeight)
+        .slice(0, 6)
+        .map(([code, info]) => ({ code, ...info, totalWeight: +info.totalWeight.toFixed(2) })),
+    }))
+
+  const pieSlices = sectors.slice(0, 14).map(s => ({
+    label: s.name, value: s.weight, color: s.color,
+  }))
+
+  return (
+    <div>
+      <div className="text-sm font-semibold text-[#40C4FF] mb-2">
+        📊 主動式ETF 產業配置分析（股票型彙整）
+      </div>
+      <div className="bg-[#101214] border border-[#1E2833] rounded p-3 space-y-3">
+
+        {/* Pie + legend row */}
+        <div className="flex gap-4 items-start">
+          <div className="flex-shrink-0">
+            <SvgDonutChart slices={pieSlices} size={140} />
+          </div>
+          <div className="flex-1 min-w-0 space-y-1">
+            <div className="text-[9px] text-gray-600 mb-1.5">各產業累計持倉權重加總</div>
+            {sectors.slice(0, 12).map(s => (
+              <div key={s.name} className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: s.color }} />
+                <span className="text-[10px] text-gray-300 truncate w-20 flex-shrink-0">{s.name}</span>
+                <div className="flex-1 h-1.5 bg-[#1A1A1A] rounded overflow-hidden">
+                  <div className="h-full rounded" style={{ width: `${s.pct}%`, background: s.color, opacity: 0.75 }} />
+                </div>
+                <span className="text-[10px] font-mono text-gray-400 w-9 text-right flex-shrink-0">{s.pct}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Expand/collapse individual sector stock lists */}
+        <button
+          onClick={() => setExpanded(e => !e)}
+          className="text-[9px] text-gray-600 hover:text-gray-400 transition-colors w-full text-left border-t border-[#1E1E1E] pt-2"
+        >
+          {expanded ? '▲ 收起個股明細' : '▼ 展開各產業個股明細'}
+        </button>
+
+        {expanded && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
+            {sectors.slice(0, 12).map(s => (
+              <div key={s.name} className="bg-[#0A0D10] rounded p-2">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <div className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: s.color }} />
+                  <span className="text-[11px] font-semibold text-gray-100">{s.name}</span>
+                  <span className="text-[9px] text-gray-600 ml-auto">{s.pct}% 合計</span>
+                </div>
+                {s.topStocks.map(st => (
+                  <div key={st.code} className="flex items-center gap-1 py-0.5 border-b border-[#0F1215] last:border-0 text-[9px]">
+                    <span className="text-[#40C4FF] font-mono w-10 flex-shrink-0">{st.code}</span>
+                    <span className="text-gray-400 flex-1 truncate">{st.name}</span>
+                    <span className="text-[#FFA726] font-mono flex-shrink-0">{st.totalWeight}%</span>
+                    {st.etfCount > 1 && (
+                      <span className="text-gray-700 flex-shrink-0 ml-0.5">{st.etfCount}檔</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Active ETF holdings panel ─────────────────────────────────────────────────
 function EtfHoldingsPanel({ symbol }) {
   const code = symbol.toUpperCase().replace('.TW', '')
@@ -929,6 +1114,9 @@ function DailyReport() {
       </div>
 
       <TrumpNewsReportSummary data={report.trump_news} />
+
+      {/* Active ETF sector pie-chart overview */}
+      <EtfSectorOverview />
 
       {/* All stock summaries */}
       {report.all_results && (
