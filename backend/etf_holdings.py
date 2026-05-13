@@ -811,9 +811,13 @@ def fetch_etf_holdings(etf_code: str, force_refresh: bool = False) -> dict:
         if age < HOLDINGS_CACHE_TTL:
             cached = _load_json(curr_p)
             if cached.get("holdings") or cached.get("error"):
+                # Only re-enrich if data lacks sector field (wasn't enriched yet)
+                # This avoids expensive re-processing on every cache-read
                 if cached.get("holdings"):
-                    # Re-enrich on every cache-read so sector/name fixes apply immediately
-                    cached = _refresh_result_enrichment(cached)
+                    first_holding = cached["holdings"][0] if cached["holdings"] else None
+                    if first_holding and "sector" not in first_holding:
+                        logger.debug("%s cache missing sector field, enriching...", code_upper)
+                        cached = _refresh_result_enrichment(cached)
                 return cached
 
     name     = ACTIVE_ETFS.get(code_upper, code_upper)
@@ -893,10 +897,7 @@ def fetch_all_etf_holdings(force_refresh: bool = False) -> dict[str, dict]:
             try:
                 with open(all_cache, encoding="utf-8") as f:
                     cached_all = json.load(f)
-                # Re-enrich on read so sector/name fixes apply to cached data
-                for etf_data in cached_all.values():
-                    if etf_data.get("holdings"):
-                        _refresh_result_enrichment(etf_data)
+                logger.info("All ETF holdings cache hit (age=%.1fs, TTL=%d)", age, ALL_CACHE_TTL)
                 return cached_all
             except Exception:
                 pass
@@ -917,7 +918,7 @@ def fetch_all_etf_holdings(force_refresh: bool = False) -> dict[str, dict]:
                 "holdings": [], "total_holdings": 0,
                 "error": str(e),
             }
-        time.sleep(1.2)   # polite delay between MoneyDJ requests
+        time.sleep(0.5)   # polite delay between MoneyDJ requests (reduced from 1.2s)
 
     try:
         with open(all_cache, "w", encoding="utf-8") as f:
