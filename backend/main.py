@@ -186,6 +186,8 @@ def _run_etf_holdings_refresh():
         ok  = sum(1 for v in _etf_holdings.values() if v.get("total_holdings", 0) > 0)
         err = sum(1 for v in _etf_holdings.values() if v.get("error"))
         logger.info("ETF holdings refresh done: %d OK, %d errors", ok, err)
+        fetch_etf_sector_summary(force_refresh=True, holdings_refresh=False)
+        logger.info("ETF sector summary snapshot refreshed.")
     except Exception as e:
         logger.error("ETF holdings refresh failed: %s", e)
 
@@ -486,7 +488,7 @@ def get_all_etf_holdings(refresh: bool = False):
 
 @app.get("/api/etf-holdings/sector-summary")
 def get_etf_sector_summary(refresh: bool = False, holdings_refresh: bool = False):
-    """Return sector-level active ETF summary with a backend-rendered PNG pie chart."""
+    """Return sector-level active ETF summary with frontend pie-chart geometry."""
     return fetch_etf_sector_summary(force_refresh=refresh, holdings_refresh=holdings_refresh)
 
 

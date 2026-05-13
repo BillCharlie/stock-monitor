@@ -12,8 +12,6 @@ const CHANGE_LABELS = {
   year: '年',
 }
 
-const ETF_BASELINE_START = '2025-05-14'
-
 function fmt(value, digits = 2) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '0'
@@ -71,17 +69,21 @@ function findSliceFromPointer(event, chart) {
 }
 
 function ChangeCard({ label, change }) {
-  const available = change?.available !== false
-  const delta = available ? change?.delta_pct_points : 0
-  const baselineDate = change?.baseline_date || ETF_BASELINE_START
+  const delta = Number(change?.delta_pct_points)
+  const available = change?.available === true && Number.isFinite(delta)
+  const baselineDate = change?.baseline_date
+  const coverage = change?.coverage || {}
+  const coverageText = Number.isFinite(Number(coverage.etf_total)) && coverage.etf_total > 0
+    ? ` · ${coverage.etf_success}/${coverage.etf_total} ETF`
+    : ''
   return (
-    <div className="min-w-[92px] flex-1 border border-[#1F2A36] bg-[#0A0F14] px-3 py-2">
+    <div className={`min-w-[92px] flex-1 border border-[#1F2A36] bg-[#0A0F14] px-3 py-2 ${available ? '' : 'opacity-70'}`}>
       <div className="text-[10px] text-gray-600">{label}變化</div>
       <div className={`mt-1 text-sm font-mono font-semibold ${changeTone(delta)}`}>
-        {signed(delta, 2, 'pp')}
+        {available ? signed(delta, 2, 'pp') : '資料累積中'}
       </div>
       <div className="mt-0.5 text-[9px] text-gray-600">
-        基準 {fmtDate(baselineDate)}
+        {available ? `基準 ${fmtDate(baselineDate)}${coverageText}` : '尚未取得完整歷史'}
       </div>
     </div>
   )
@@ -389,7 +391,7 @@ export default function ActiveEtfPanel() {
               </div>
 
               <div className="border-t border-[#1A1A1A] px-3 py-2 text-[10px] text-gray-600">
-                變化值優先使用已累積的產業快照；缺少對應日期時，以 2025-05-14 起始基準補足。
+                變化值只使用後端逐 ETF 抓到的真實歷史持股快照；缺少完整基準時不補 0。
               </div>
             </div>
           </div>

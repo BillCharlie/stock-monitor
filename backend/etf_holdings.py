@@ -50,6 +50,11 @@ HOLDINGS_CACHE_TTL = 4 * 3600    # 4 hours — skip re-fetch if cache is fresh
 ALL_CACHE_TTL      = 3 * 3600    # 3 hours — combined all-ETF snapshot
 STOCK_MASTER_CACHE_TTL = 24 * 3600
 ETF_SECTOR_BASELINE_START_DATE = os.getenv("ETF_SECTOR_BASELINE_START_DATE", "2025-05-14")
+ETF_SECTOR_HISTORY_VERSION = 4
+GOAL_STAR_BASE_URL = os.getenv("GOAL_STAR_BASE_URL", "https://goal-star.com").rstrip("/")
+GOAL_STAR_CACHE_TTL = int(os.getenv("GOAL_STAR_CACHE_TTL", str(6 * 3600)))
+GOAL_STAR_FULL_HOLDINGS_MAX_DAYS = int(os.getenv("GOAL_STAR_FULL_HOLDINGS_MAX_DAYS", "14"))
+GOAL_STAR_HISTORY_SCAN_DAYS = int(os.getenv("GOAL_STAR_HISTORY_SCAN_DAYS", "8"))
 
 SECTOR_CHANGE_PERIODS = {
     "day": 1,
@@ -164,6 +169,33 @@ _FALLBACK_SECTOR_COLORS = [
     "#A1887F", "#B39DDB", "#FF7043", "#90A4AE", "#66BB6A", "#F48FB1",
     "#4DB6AC", "#9575CD", "#DCE775", "#7986CB",
 ]
+
+_GOAL_STAR_INDUSTRY_SECTORS = {
+    "Semiconductors": "半導體",
+    "Electronic Components": "電子零組件",
+    "Computer Hardware": "科技系統廠",
+    "Communications Equipment": "通信網路",
+    "Electrical Equipment": "電器電纜",
+    "Machinery": "電機機械",
+    "Financial Services": "金融",
+    "Banks": "金融",
+    "Insurance": "金融",
+    "Chemicals": "化工/塑化",
+    "Plastics": "化工/塑化",
+    "Steel": "鋼鐵",
+    "Automobiles": "汽車",
+    "Auto Parts": "汽車",
+    "Solar": "太陽能/綠能",
+    "Renewable Energy": "太陽能/綠能",
+    "Biotechnology": "生技醫療",
+    "Healthcare": "生技醫療",
+    "Retail": "零售",
+    "Transportation": "航運",
+    "Shipping": "航運",
+    "Construction": "建設",
+    "Textiles": "紡織",
+    "Food": "食品",
+}
 
 # ── Master list ───────────────────────────────────────────────────────────────
 ACTIVE_ETFS: dict[str, str] = {
@@ -621,6 +653,9 @@ def _enrich_holdings(holdings: list[dict]) -> list[dict]:
             repaired_name = nm[code]
 
         sector = sm.get(code, "其他") if code else "其他"
+        goal_star_sector = _GOAL_STAR_INDUSTRY_SECTORS.get(str(h.get("goal_star_industry") or "").strip())
+        if goal_star_sector and sector == "其他":
+            sector = goal_star_sector
         enriched.append({
             **h,
             "stock_code": code,
@@ -695,6 +730,263 @@ def _parse_date_key(value: str | None) -> datetime | None:
         return datetime.strptime(text, "%Y-%m-%d")
     except Exception:
         return None
+
+
+def _active_stock_etf_codes() -> list[str]:
+    return sorted(code for code in ACTIVE_ETFS if not code.endswith("D"))
+
+
+def _goal_star_json_cache_path(kind: str, code: str, date_key: str = "") -> str:
+    suffix = f"_{date_key}" if date_key else ""
+    return os.path.join(CACHE_DIR, f"goal_star_{kind}_{_normalise_code(code)}{suffix}.json")
+
+
+def _load_fresh_json(path: str, ttl: int) -> dict:
+    if not os.path.exists(path):
+        return {}
+    if ttl > 0 and time.time() - os.path.getmtime(path) > ttl:
+        return {}
+    return _load_json(path)
+
+
+def _goal_star_headers() -> dict:
+    return {
+        **_HEADERS,
+        "Accept": "application/json,text/plain,*/*",
+        "Referer": "https://goal-star.com/",
+    }
+
+
+def _goal_star_items(data) -> list[dict]:
+    if isinstance(data, dict):
+        items = data.get("items") or data.get("data") or data.get("shares") or []
+    else:
+        items = data or []
+    return items if isinstance(items, list) else []
+
+
+def _fetch_goal_star_fund_meta(code: str, force_refresh: bool = False) -> dict:
+    code = _normalise_code(code)
+    path = _goal_star_json_cache_path("fund_meta", code)
+    if not force_refresh:
+        cached = _load_fresh_json(path, STOCK_MASTER_CACHE_TTL)
+        if cached:
+            return cached
+
+    try:
+        resp = requests.get(
+            f"{GOAL_STAR_BASE_URL}/api/funds/{code}",
+            headers=_goal_star_headers(),
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            data = {"code": code, "error": f"Goal Star HTTP {resp.status_code}", "status_code": resp.status_code}
+        else:
+            data = resp.json() if resp.content else {}
+            if isinstance(data, dict):
+                data = {**data, "code": code}
+            else:
+                data = {"code": code, "error": "Goal Star meta format error"}
+    except Exception as exc:
+        data = {"code": code, "error": str(exc)}
+
+    data["fetched_at"] = datetime.now().isoformat()
+    _save_json(path, data)
+    return data
+
+
+def _goal_star_holding_to_local(item: dict) -> dict:
+    code = _normalise_code(
+        item.get("stock_symbol")
+        or item.get("stock_code")
+        or item.get("symbol")
+        or ""
+    )
+    shares = item.get("shares")
+    try:
+        shares = int(float(str(shares).replace(",", ""))) if shares not in (None, "") else None
+    except Exception:
+        shares = None
+    return {
+        "stock_code": code,
+        "stock_name": item.get("stock_name") or item.get("name") or code,
+        "shares": shares,
+        "weight_pct": _as_float(item.get("ratio") or item.get("weight") or item.get("weight_pct")),
+        "goal_star_industry": item.get("industry"),
+    }
+
+
+def _fetch_goal_star_fund_shares(
+    code: str,
+    date_key: str | None = None,
+    *,
+    force_refresh: bool = False,
+) -> dict:
+    code = _normalise_code(code)
+    date_key = _date_only(date_key)
+    cache_key = date_key or "latest"
+    path = _goal_star_json_cache_path("fund_shares", code, cache_key)
+    if not force_refresh:
+        cached = _load_fresh_json(path, GOAL_STAR_CACHE_TTL)
+        if cached:
+            return cached
+
+    params = {"date": date_key} if date_key else None
+    try:
+        resp = requests.get(
+            f"{GOAL_STAR_BASE_URL}/api/funds/{code}/shares",
+            params=params,
+            headers=_goal_star_headers(),
+            timeout=20,
+        )
+        if resp.status_code != 200:
+            result = {
+                "code": code,
+                "name": ACTIVE_ETFS.get(code, code),
+                "date": date_key,
+                "holdings": [],
+                "total_holdings": 0,
+                "source": "goal_star",
+                "error": f"Goal Star HTTP {resp.status_code}",
+                "status_code": resp.status_code,
+            }
+        else:
+            data = resp.json() if resp.content else {}
+            raw_items = _goal_star_items(data)
+            holdings = []
+            actual_dates = set()
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("date"):
+                    actual_dates.add(_date_only(item.get("date")))
+                holding = _goal_star_holding_to_local(item)
+                if holding.get("stock_code") and _as_float(holding.get("weight_pct")) > 0:
+                    holdings.append(holding)
+            result = {
+                "code": code,
+                "name": ACTIVE_ETFS.get(code, code),
+                "type": "stock",
+                "date": max(actual_dates) if actual_dates else date_key,
+                "requested_date": date_key,
+                "holdings": _enrich_holdings(holdings),
+                "total_holdings": len(holdings),
+                "source": "goal_star",
+            }
+            if not holdings:
+                result["error"] = "Goal Star returned no holdings"
+    except Exception as exc:
+        result = {
+            "code": code,
+            "name": ACTIVE_ETFS.get(code, code),
+            "date": date_key,
+            "holdings": [],
+            "total_holdings": 0,
+            "source": "goal_star",
+            "error": str(exc),
+        }
+
+    result["fetched_at"] = datetime.now().isoformat()
+    _save_json(path, result)
+    return result
+
+
+def _fetch_goal_star_nearest_holdings(code: str, target_dt: datetime) -> dict | None:
+    for offset in range(GOAL_STAR_HISTORY_SCAN_DAYS + 1):
+        date_key = (target_dt - timedelta(days=offset)).strftime("%Y-%m-%d")
+        result = _fetch_goal_star_fund_shares(code, date_key)
+        if result.get("holdings"):
+            return result
+    return None
+
+
+def _load_cached_holdings_near_target(code: str, target_dt: datetime) -> dict | None:
+    candidates = [_load_json(_curr_path(code)), _load_json(_prev_path(code))]
+    valid = []
+    for result in candidates:
+        result_dt = _parse_date_key(result.get("date"))
+        if not result_dt or not result.get("holdings"):
+            continue
+        if result_dt <= target_dt and (target_dt - result_dt).days <= GOAL_STAR_HISTORY_SCAN_DAYS:
+            valid.append((result_dt, result))
+    if not valid:
+        return None
+    _, result = max(valid, key=lambda item: item[0])
+    result = _refresh_result_enrichment(dict(result))
+    result["source"] = result.get("source") or "local_holdings_cache"
+    return result
+
+
+def _goal_star_sector_snapshot_for_period(
+    current_date: str,
+    period_key: str,
+    days_back: int,
+) -> tuple[dict | None, dict]:
+    current_dt = _parse_date_key(current_date) or datetime.now()
+    target_dt = current_dt - timedelta(days=days_back)
+    target_date = target_dt.strftime("%Y-%m-%d")
+    meta = {
+        "available": False,
+        "source": "goal_star_full_holdings",
+        "target_date": target_date,
+        "max_public_days": GOAL_STAR_FULL_HOLDINGS_MAX_DAYS,
+    }
+    if days_back > GOAL_STAR_FULL_HOLDINGS_MAX_DAYS:
+        meta["reason"] = "full_holdings_history_not_public"
+        return None, meta
+
+    historical: dict[str, dict] = {}
+    missing: list[str] = []
+    not_listed: list[str] = []
+    actual_dates: dict[str, str] = {}
+    source_counts: dict[str, int] = defaultdict(int)
+    for code in _active_stock_etf_codes():
+        fund_meta = _fetch_goal_star_fund_meta(code)
+        listed_dt = _parse_date_key(fund_meta.get("listed_date"))
+        if listed_dt and listed_dt > target_dt:
+            not_listed.append(code)
+            continue
+        result = _fetch_goal_star_nearest_holdings(code, target_dt)
+        if not (result and result.get("holdings")):
+            result = _load_cached_holdings_near_target(code, target_dt)
+        if result and result.get("holdings"):
+            historical[code] = result
+            actual_dates[code] = _date_only(result.get("date"))
+            source_counts[result.get("source") or "unknown"] += 1
+        else:
+            missing.append(code)
+
+    meta.update({
+        "etf_total": len(_active_stock_etf_codes()),
+        "etf_success": len(historical),
+        "etf_not_listed": len(not_listed),
+        "etf_missing": len(missing),
+        "actual_dates": actual_dates,
+        "source_counts": dict(source_counts),
+        "missing": missing[:12],
+        "not_listed": not_listed[:12],
+    })
+    if not historical:
+        meta["reason"] = "no_historical_holdings"
+        return None, meta
+
+    payload = _build_active_etf_sector_payload(historical, top_n=0, include_chart=False)
+    payload["baseline_kind"] = "goal_star_full_holdings"
+    payload["history_method_version"] = ETF_SECTOR_HISTORY_VERSION
+    snapshot = _sector_summary_snapshot(payload)
+    snapshot.update({
+        "date": max((v for v in actual_dates.values() if v), default=target_date),
+        "target_date": target_date,
+        "baseline_kind": "goal_star_full_holdings",
+        "period_key": period_key,
+        "coverage": meta,
+    })
+    meta.update({
+        "available": True,
+        "date": snapshot.get("date"),
+        "baseline_kind": snapshot.get("baseline_kind"),
+    })
+    return snapshot, meta
 
 
 def _build_sector_chart_geometry(sectors: list[dict]) -> dict:
@@ -865,6 +1157,7 @@ def _build_active_etf_sector_payload(
     payload = {
         "date": latest_date or datetime.now().strftime("%Y-%m-%d"),
         "generated_at": datetime.now().isoformat(),
+        "history_method_version": ETF_SECTOR_HISTORY_VERSION,
         "method": "各股票型主動式ETF持股權重直接加總，再按全部持股權重換算產業占比；未依ETF規模加權。",
         "stock_etf_count": stock_etf_count,
         "sector_count": len(sector_list),
@@ -882,6 +1175,8 @@ def _sector_summary_snapshot(payload: dict) -> dict:
     return {
         "date": payload.get("date"),
         "generated_at": payload.get("generated_at"),
+        "baseline_kind": payload.get("baseline_kind", "sector_snapshot"),
+        "history_method_version": payload.get("history_method_version", ETF_SECTOR_HISTORY_VERSION),
         "total_weight": payload.get("total_weight", 0),
         "sectors": {
             s.get("name"): {
@@ -898,6 +1193,15 @@ def _sector_summary_snapshot(payload: dict) -> dict:
 
 def _sector_snapshot_path(date_key: str) -> str:
     return os.path.join(CACHE_DIR, f"etf_sector_summary_{date_key}.json")
+
+
+def _is_real_sector_snapshot(snapshot: dict) -> bool:
+    if not snapshot or not snapshot.get("sectors"):
+        return False
+    return (
+        snapshot.get("baseline_kind") != "start_zero"
+        and snapshot.get("history_method_version") == ETF_SECTOR_HISTORY_VERSION
+    )
 
 
 def _find_sector_snapshot(current_date: str, days_back: int) -> dict | None:
@@ -919,7 +1223,7 @@ def _find_sector_snapshot(current_date: str, days_back: int) -> dict | None:
         return None
     _, path = max(candidates, key=lambda item: item[0])
     snap = _load_json(path)
-    return snap if snap.get("sectors") else None
+    return snap if _is_real_sector_snapshot(snap) else None
 
 
 def _prev_day_sector_snapshot(all_holdings: dict[str, dict]) -> dict | None:
@@ -933,26 +1237,9 @@ def _prev_day_sector_snapshot(all_holdings: dict[str, dict]) -> dict | None:
     if not prev_all:
         return None
     payload = _build_active_etf_sector_payload(prev_all, top_n=0, include_chart=False)
+    payload["baseline_kind"] = "previous_holdings_cache"
+    payload["history_method_version"] = ETF_SECTOR_HISTORY_VERSION
     return _sector_summary_snapshot(payload)
-
-
-def _baseline_start_sector_snapshot(payload: dict) -> dict:
-    return {
-        "date": ETF_SECTOR_BASELINE_START_DATE,
-        "generated_at": payload.get("generated_at") or datetime.now().isoformat(),
-        "total_weight": 0,
-        "baseline_kind": "start_zero",
-        "sectors": {
-            s.get("name"): {
-                "total_weight": 0,
-                "pct": 0,
-                "etf_count": 0,
-                "stock_count": 0,
-            }
-            for s in payload.get("sectors", [])
-            if s.get("name")
-        },
-    }
 
 
 def _sector_baseline_for_period(
@@ -960,11 +1247,53 @@ def _sector_baseline_for_period(
     all_holdings: dict[str, dict],
     period_key: str,
     days_back: int,
-) -> dict:
+) -> tuple[dict | None, dict]:
+    meta = {
+        "available": False,
+        "period_key": period_key,
+        "days_back": days_back,
+        "target_date": None,
+        "source": None,
+    }
+    current_dt = _parse_date_key(payload.get("date")) or datetime.now()
+    meta["target_date"] = (current_dt - timedelta(days=days_back)).strftime("%Y-%m-%d")
+
     baseline = _find_sector_snapshot(payload.get("date"), days_back)
-    if not baseline and period_key == "day":
+    if _is_real_sector_snapshot(baseline or {}):
+        meta.update({
+            "available": True,
+            "date": baseline.get("date"),
+            "source": baseline.get("baseline_kind", "sector_snapshot"),
+            "baseline_kind": baseline.get("baseline_kind", "sector_snapshot"),
+        })
+        if baseline.get("coverage"):
+            meta.update(baseline.get("coverage"))
+        return baseline, meta
+
+    goal_star_snapshot, goal_star_meta = _goal_star_sector_snapshot_for_period(
+        payload.get("date"),
+        period_key,
+        days_back,
+    )
+    if _is_real_sector_snapshot(goal_star_snapshot or {}):
+        date_key = _date_only(goal_star_snapshot.get("date"))
+        if date_key:
+            _save_json(_sector_snapshot_path(date_key), goal_star_snapshot)
+        return goal_star_snapshot, goal_star_meta
+    meta.update(goal_star_meta)
+
+    if period_key == "day":
         baseline = _prev_day_sector_snapshot(all_holdings)
-    return baseline or _baseline_start_sector_snapshot(payload)
+        if _is_real_sector_snapshot(baseline or {}):
+            meta.update({
+                "available": True,
+                "date": baseline.get("date"),
+                "source": baseline.get("baseline_kind", "previous_holdings_cache"),
+                "baseline_kind": baseline.get("baseline_kind", "previous_holdings_cache"),
+            })
+            return baseline, meta
+
+    return None, meta
 
 
 def _calc_sector_change(sector: dict, baseline: dict | None) -> dict:
@@ -988,6 +1317,7 @@ def _calc_sector_change(sector: dict, baseline: dict | None) -> dict:
         "previous_weight": round(previous_weight, 4),
         "delta_weight": round(_as_float(sector.get("total_weight")) - previous_weight, 4),
         "baseline_kind": baseline.get("baseline_kind", "snapshot"),
+        "coverage": baseline.get("coverage"),
     }
 
 
@@ -1004,33 +1334,32 @@ def fetch_etf_sector_summary(force_refresh: bool = False, holdings_refresh: bool
             cached_periods = set()
             if cached.get("sectors"):
                 cached_periods = set((cached["sectors"][0].get("changes") or {}).keys())
+            has_start_zero = any(
+                (change or {}).get("baseline_kind") == "start_zero"
+                for sector in cached.get("sectors", [])
+                for change in (sector.get("changes") or {}).values()
+            )
             if (
-                cached.get("sectors")
+                cached.get("history_method_version") == ETF_SECTOR_HISTORY_VERSION
+                and cached.get("sectors")
                 and cached.get("chart")
                 and "image" not in cached.get("chart", {})
                 and all(key in cached_periods for key in SECTOR_CHANGE_PERIODS)
+                and not has_start_zero
             ):
                 return cached
 
     all_holdings = fetch_all_etf_holdings(force_refresh=holdings_refresh)
     payload = _build_active_etf_sector_payload(all_holdings, top_n=20, include_chart=True)
+    payload["history_method_version"] = ETF_SECTOR_HISTORY_VERSION
+    payload["baseline_kind"] = "current_sector_snapshot"
 
-    start_snapshot = _baseline_start_sector_snapshot(payload)
-    start_path = _sector_snapshot_path(ETF_SECTOR_BASELINE_START_DATE)
-    if not os.path.exists(start_path):
-        _save_json(start_path, start_snapshot)
-
-    baselines = {
+    baseline_pairs = {
         key: _sector_baseline_for_period(payload, all_holdings, key, days_back)
         for key, days_back in SECTOR_CHANGE_PERIODS.items()
     }
-    payload["change_sources"] = {
-        key: {
-            "available": bool(value and value.get("sectors")),
-            "date": value.get("date") if value else None,
-        }
-        for key, value in baselines.items()
-    }
+    baselines = {key: value for key, (value, _meta) in baseline_pairs.items()}
+    payload["change_sources"] = {key: meta for key, (_value, meta) in baseline_pairs.items()}
     for sector in payload.get("sectors", []):
         sector["changes"] = {
             key: _calc_sector_change(sector, baseline)
