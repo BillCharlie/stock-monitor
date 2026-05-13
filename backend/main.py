@@ -651,18 +651,52 @@ def test_email(to: Optional[str] = Query(None)):
 
 @app.get("/api/test/quotes")
 def test_quotes(symbols: str = Query(..., description="逗號分隔代號，如 5347.TW,5274.TW")):
-    """Batch quote test — returns price or error for each symbol. No auth needed."""
-    from stock_data import get_quote
+    """Batch quote test — verbose errors per symbol. No auth needed."""
+    import yfinance as yf
+    import requests as _req
+    from datetime import datetime, timedelta
+
     results = {}
     for raw in symbols.split(","):
         s = raw.strip()
         if not s:
             continue
+        detail = {}
+
+        # ── yfinance probe ────────────────────────────────────────────────────
         try:
-            q = get_quote(s)
-            results[s] = q if q else "❌ 無資料"
+            t  = yf.Ticker(s)
+            df = t.history(period="5d", interval="1d", auto_adjust=True, actions=False)
+            if not df.empty:
+                detail["yf"] = f"✅ {len(df)} rows, last close={float(df['Close'].iloc[-1]):.2f}"
+            else:
+                detail["yf"] = "❌ empty DataFrame"
         except Exception as e:
-            results[s] = f"❌ {e}"
+            detail["yf"] = f"❌ {type(e).__name__}: {e}"
+
+        # ── TWSE probe (only for .TW) ─────────────────────────────────────────
+        if s.upper().endswith(".TW"):
+            code = s.split(".")[0]
+            date_str = datetime.now().replace(day=1).strftime("%Y%m%d")
+            try:
+                r = _req.get(
+                    "https://www.twse.com.tw/exchangeReport/STOCK_DAY",
+                    params={"response": "json", "date": date_str, "stockNo": code},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                    timeout=10, verify=False,
+                )
+                data = r.json()
+                stat = data.get("stat")
+                rows = data.get("data", [])
+                if rows:
+                    last = rows[-1]
+                    detail["twse"] = f"✅ stat={stat}, {len(rows)} rows, last close={last[6]}"
+                else:
+                    detail["twse"] = f"❌ stat={stat}, no data rows"
+            except Exception as e:
+                detail["twse"] = f"❌ {type(e).__name__}: {e}"
+
+        results[s] = detail
     return results
 
 
