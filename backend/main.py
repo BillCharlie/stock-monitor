@@ -35,6 +35,12 @@ from indicators import (
 )
 from stock_data import df_to_ohlcv_list, get_investors_data, get_ohlcv, get_quote
 from watchlist import MARKET_INDICES, WATCHLIST
+from realtime_data import get_realtime_quote, get_intraday_kline, validate_symbol
+from chip_analysis import (
+    get_twse_chip_distribution,
+    get_major_trader_analysis,
+    identify_major_institutions,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -318,13 +324,43 @@ def get_custom_stocks():
 
 @app.post("/api/custom-stocks", dependencies=[Depends(_require_stock_auth)])
 def add_custom_stock(item: StockItem):
+    """
+    Add a custom stock with validation.
+    Returns detailed validation result or error information.
+    """
     stocks = load_custom_stocks()
     symbol = item.symbol.strip().upper()
+    
+    # Check for duplicates
     if any(s["symbol"] == symbol for s in stocks):
         raise HTTPException(status_code=400, detail="股票代號已存在")
-    stocks.append({"symbol": symbol, "name": item.name.strip() or symbol})
+    
+    # Validate symbol format and data availability
+    logger.info(f"Validating custom stock: {symbol}")
+    validation = validate_symbol(symbol)
+    
+    if not validation.get("valid"):
+        raise HTTPException(
+            status_code=400,
+            detail=validation.get("error", "Invalid stock symbol"),
+        )
+    
+    # Symbol is valid, add to list
+    stocks.append({
+        "symbol": symbol,
+        "name": item.name.strip() or symbol,
+        "added_at": datetime.now().isoformat(),
+        "price": validation.get("price"),
+        "timestamp": validation.get("timestamp"),
+    })
     save_custom_stocks(stocks)
-    return {"status": "ok", "stocks": stocks}
+    logger.info(f"Custom stock added: {symbol}")
+    
+    return {
+        "status": "ok",
+        "stocks": stocks,
+        "validation": validation
+    }
 
 @app.delete("/api/custom-stocks/{symbol}", dependencies=[Depends(_require_stock_auth)])
 def delete_custom_stock(symbol: str):
@@ -390,6 +426,131 @@ def get_stock_quote(symbol: str):
 @app.get("/api/stocks/{symbol}/investors")
 def get_stock_investors(symbol: str):
     return get_investors_data(symbol)
+
+
+# ─── Real-time quote (for intraday updates) ──────────────────────────────────
+
+@app.get("/api/stocks/{symbol}/realtime")
+def get_stock_realtime(symbol: str):
+    """Get real-time price quote with minimal delay (30 seconds cache)."""
+    try:
+        return get_realtime_quote(symbol)
+    except Exception as e:
+        logger.warning(f"Realtime quote fetch failed for {symbol}: {e}")
+        raise HTTPException(status_code=503, detail="Unable to fetch real-time data")
+
+
+# ─── Intraday K-line (for intraday trading) ──────────────────────────────────
+
+@app.get("/api/stocks/{symbol}/intraday-kline")
+def get_stock_intraday_kline(
+    symbol: str,
+    interval: int = Query(1, ge=1, le=60),  # 1, 5, 15, 30, 60 minutes
+):
+    """Get intraday K-line bars with minimal delay for active trading."""
+    try:
+        klines = get_intraday_kline(symbol, interval=interval)
+        
+        if not klines:
+            raise HTTPException(status_code=404, detail=f"No intraday data for {symbol}")
+        
+        return {
+            "symbol": symbol,
+            "interval": f"{interval}m",
+            "timestamp": datetime.now().isoformat(),
+            "data": klines,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Intraday kline fetch failed for {symbol}: {e}")
+        raise HTTPException(status_code=503, detail="Unable to fetch intraday data")
+
+
+# ─── Chip/Major Shareholder Analysis ─────────────────────────────────────────
+
+@app.get("/api/stocks/{symbol}/chip-analysis")
+def get_stock_chip_analysis(symbol: str):
+    """
+    Analyze institutional holdings, major shareholders, and concentration.
+    Includes chip distribution and institutional breakdown.
+    """
+    try:
+        chip_data = get_twse_chip_distribution(symbol)
+        
+        return {
+            "symbol": symbol,
+            "timestamp": datetime.now().isoformat(),
+            "chip_distribution": chip_data,
+        }
+    except Exception as e:
+        logger.warning(f"Chip analysis fetch failed for {symbol}: {e}")
+        raise HTTPException(status_code=503, detail="Unable to fetch chip analysis data")
+
+
+# ─── Major Traders (institutional activity pattern analysis) ────────────────
+
+@app.get("/api/stocks/{symbol}/major-traders")
+def get_stock_major_traders(symbol: str):
+    """
+    Analyze major institutional trading activity and patterns.
+    Identifies high-volume trading days and trends.
+    """
+    try:
+        trader_data = get_major_trader_analysis(symbol)
+        
+        if "error" in trader_data:
+            raise HTTPException(status_code=404, detail=trader_data["error"])
+        
+        return {
+            "symbol": symbol,
+            "timestamp": datetime.now().isoformat(),
+            "major_traders": trader_data,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Major traders analysis failed for {symbol}: {e}")
+        raise HTTPException(status_code=503, detail="Unable to fetch major traders data")
+
+
+# ─── Institution Identification (with ML/pattern matching) ──────────────────
+
+@app.get("/api/stocks/{symbol}/institutions")
+def get_stock_institutions(symbol: str):
+    """
+    Identify specific major institutions involved in recent trading.
+    Combines 三大法人 data with holdings and patterns to pinpoint institutions.
+    """
+    try:
+        # First get 三大法人 data
+        investors_data = get_investors_data(symbol)
+        
+        if "error" in investors_data:
+            return {
+                "symbol": symbol,
+                "timestamp": datetime.now().isoformat(),
+                "institutions": {},
+                "error": investors_data.get("error"),
+            }
+        
+        # Identify specific institutions
+        institutions = identify_major_institutions(symbol, investors_data)
+        
+        return {
+            "symbol": symbol,
+            "timestamp": datetime.now().isoformat(),
+            "three_forces": investors_data,
+            "institutions": institutions,
+            "summary": {
+                "likely_buyers": [inst["type"] for inst in institutions.get("likely_buyers", [])],
+                "likely_sellers": [inst["type"] for inst in institutions.get("likely_sellers", [])],
+                "sentiment": institutions.get("trend_summary", {}).get("sentiment", "未知"),
+            }
+        }
+    except Exception as e:
+        logger.warning(f"Institution identification failed for {symbol}: {e}")
+        raise HTTPException(status_code=503, detail="Unable to identify institutions")
 
 
 # ─── Analysis ─────────────────────────────────────────────────────────────────

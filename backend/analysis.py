@@ -18,6 +18,7 @@ from indicators import (
     calculate_rsi,
 )
 from stock_data import get_ohlcv, get_investors_data
+from chip_analysis import identify_major_institutions
 
 logger = logging.getLogger(__name__)
 
@@ -476,6 +477,12 @@ def analyze_stock(symbol: str, name: str = "", interval: str = "1d") -> dict:
         resistance = float(recent["High"].max())
 
     rating_key = _score_to_rating(score)
+    
+    # Get institutional investor analysis
+    investors_data = _analyze_institutional_investors(symbol)
+    institutional_analysis = None
+    if not investors_data.get("error"):
+        institutional_analysis = identify_major_institutions(symbol, investors_data)
 
     return {
         "symbol": symbol,
@@ -505,7 +512,8 @@ def analyze_stock(symbol: str, name: str = "", interval: str = "1d") -> dict:
         "resistance": round(resistance, 2) if resistance else None,
         "prediction_5d": prediction_5d,
         "prediction_20d": prediction_20d,
-        "investors": _analyze_institutional_investors(symbol),
+        "investors": investors_data,
+        "institutional_analysis": institutional_analysis,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 

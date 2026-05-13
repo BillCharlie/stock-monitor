@@ -1,0 +1,29 @@
+﻿============================================================
+Testing Taiwan Stock Data Fetching (OHLCV)
+============================================================
+
+Fetching 2330.TW...
+python : Traceback (most recent call last):
+所在位置 行:1 字符: 49
++ ... scode\stock-monitor\backend"; python test_improved_tw.py 2>&1 | Out-F ...
++                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last) 
+   ::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "E:\vscode\stock-monitor\backend\test_improved_tw.py", line 20, in <modu
+le>
+    print(f"\u2713 {symbol}: {len(df)} records")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'gbk' codec can't encode character '\u2713' in position 0: 
+illegal multibyte sequence
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "E:\vscode\stock-monitor\backend\test_improved_tw.py", line 27, in <modu
+le>
+    print(f"\u2717 {symbol}: Error - {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'gbk' codec can't encode character '\u2717' in position 0: 
+illegal multibyte sequence
