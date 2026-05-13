@@ -162,6 +162,16 @@ WATCHLIST = {
                 {"symbol": "3163.TWO", "name": "波若威",       "name_en": "Powertec Technology",              "tags": ["精密電路板", "IC載板"]},
                 {"symbol": "4958.TW",  "name": "臻鼎科技",     "name_en": "Zhen Ding Technology",              "tags": ["HDI軟硬板", "FPC", "蘋果供應鏈"]},
             ],
+            "CPO光連接": [
+                {"symbol": "6919.TW",  "name": "亨泰光",       "name_en": "HGC Fiber Optics",                  "tags": ["CPO光纖連接器", "AI伺服器光互連"]},
+                {"symbol": "2345.TW",  "name": "智邦科技",     "name_en": "Accton Technology",                 "tags": ["AI網路交換器", "白牌Switch/CPO受益"]},
+                {"symbol": "3081.TWO", "name": "聯亞光電",     "name_en": "Alliance Semiconductor",            "tags": ["雷射磊晶片", "光引擎核心元件"]},
+                {"symbol": "6442.TWO", "name": "光聖",         "name_en": "FiberStar",                         "tags": ["光纖被動元件", "CPO連接組件"]},
+                {"symbol": "6449.TWO", "name": "申泰",         "name_en": "Shen Tai Co.",                      "tags": ["光收發模組", "SFP/QSFP/400G"]},
+                {"symbol": "6207.TWO", "name": "雷科",         "name_en": "LeiKe Technology",                  "tags": ["半導體雷射", "光源元件"]},
+                {"symbol": "3152.TWO", "name": "正淩精密",     "name_en": "GigaLane",                          "tags": ["光纖連接器", "高速連接器"]},
+                {"symbol": "2338.TW",  "name": "台灣光罩",     "name_en": "Taiwan Mask Corporation",           "tags": ["矽光子光罩", "CPO製程關鍵"]},
+            ],
             "科技ETF": [
                 {"symbol": "0052.TW",  "name": "富邦科技",     "name_en": "Fubon MSCI Taiwan Technology ETF",  "tags": ["台灣科技50", "電子權值股ETF"]},
             ],
