@@ -73,8 +73,24 @@ function SvgPieChart({ slices, size = 340, onSliceClick = null, activeSector = '
     const y2 = cy + radius * Math.sin(end)
     const large = span > Math.PI ? 1 : 0
     const d = `M ${cx} ${cy} L ${x1} ${y1} A ${radius} ${radius} 0 ${large} 1 ${x2} ${y2} Z`
+    
+    // Calculate label position for percentages > 5%
+    const labelAngle = angle + span / 2
+    const labelRadius = radius * 0.65
+    const labelX = cx + labelRadius * Math.cos(labelAngle)
+    const labelY = cy + labelRadius * Math.sin(labelAngle)
+    const pct = slice.value / total * 100
+    
+    const result = { 
+      ...slice, 
+      d, 
+      pct,
+      labelX,
+      labelY,
+      labelAngle
+    }
     angle = end
-    return { ...slice, d, pct: slice.value / total * 100 }
+    return result
   })
 
   return (
@@ -100,8 +116,8 @@ function SvgPieChart({ slices, size = 340, onSliceClick = null, activeSector = '
           </path>
           {p.pct > 5 && (
             <text
-              x={cx + (radius * 0.65) * Math.cos(angle + (paths.indexOf(p) === 0 ? (span / 2) : 0))}
-              y={cy + (radius * 0.65) * Math.sin(angle + (paths.indexOf(p) === 0 ? (span / 2) : 0))}
+              x={p.labelX}
+              y={p.labelY}
               textAnchor="middle"
               dominantBaseline="middle"
               className="text-[11px] font-bold fill-white pointer-events-none"
@@ -120,25 +136,34 @@ function SvgPieChart({ slices, size = 340, onSliceClick = null, activeSector = '
 }
 
 function buildModel(allData) {
+  if (!allData) return { sectors: [], etfSummaries: [], latestDate: '', stockEtfCount: 0, totalPositions: 0, totalWeight: 0, errors: [] }
+  
   const entries = Object.entries(allData || {})
   const stockEtfs = entries
     .filter(([code, info]) => !code.endsWith('D') && info && !info.error && info.holdings?.length)
     .map(([code, info]) => [code, info])
+
+  if (!stockEtfs.length) {
+    return { sectors: [], etfSummaries: [], latestDate: '', stockEtfCount: 0, totalPositions: 0, totalWeight: 0, errors: entries.filter(([, info]) => info?.error).map(([code, info]) => ({ code, error: info.error })) }
+  }
 
   const sectorMap = new Map()
   const etfSummaries = []
   let latestDate = ''
   let totalPositions = 0
 
+  // First pass: build sector and stock maps (optimized)
   for (const [etfCode, etf] of stockEtfs) {
-    const sectorWeights = {}
     const holdings = etf.holdings || []
     totalPositions += holdings.length
     if (etf.date && (!latestDate || etf.date > latestDate)) latestDate = etf.date
 
+    const topSectorsList = {}
+    
     for (const holding of holdings) {
       const weight = Number(holding.weight_pct) || 0
       if (weight <= 0) continue
+      
       const sector = holding.sector || '其他'
       const color = sectorColor(sector, sectorMap.size)
 
@@ -147,7 +172,6 @@ function buildModel(allData) {
           name: sector,
           color,
           totalWeight: 0,
-          positions: 0,
           etfCodes: new Set(),
           stocks: new Map(),
         })
@@ -155,9 +179,8 @@ function buildModel(allData) {
 
       const sec = sectorMap.get(sector)
       sec.totalWeight += weight
-      sec.positions += 1
       sec.etfCodes.add(etfCode)
-      sectorWeights[sector] = (sectorWeights[sector] || 0) + weight
+      topSectorsList[sector] = (topSectorsList[sector] || 0) + weight
 
       const stockCode = holding.stock_code || holding.stock_name || 'UNKNOWN'
       if (!sec.stocks.has(stockCode)) {
@@ -177,7 +200,7 @@ function buildModel(allData) {
       })
     }
 
-    const topSectors = Object.entries(sectorWeights)
+    const topSectors = Object.entries(topSectorsList)
       .sort(([, a], [, b]) => b - a)
       .slice(0, 3)
       .map(([name, weight]) => ({ name, weight }))
@@ -226,6 +249,8 @@ export default function ActiveEtfPanel() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [activeSector, setActiveSector] = useState('')
+  const [modelProcessing, setModelProcessing] = useState(false)
+  const [expandedStocks, setExpandedStocks] = useState(false)
 
   const load = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true)
@@ -244,13 +269,25 @@ export default function ActiveEtfPanel() {
 
   useEffect(() => { load(false) }, [load])
 
-  const model = useMemo(() => buildModel(data), [data])
+  // Process model with loading indicator
+  const model = useMemo(() => {
+    if (!data) {
+      setModelProcessing(false)
+      return { sectors: [], etfSummaries: [], latestDate: '', stockEtfCount: 0, totalPositions: 0, totalWeight: 0, errors: [] }
+    }
+    setModelProcessing(true)
+    const result = buildModel(data)
+    // Schedule UI update to happen after render
+    queueMicrotask(() => setModelProcessing(false))
+    return result
+  }, [data])
 
   useEffect(() => {
     if (!model.sectors.length) return
     if (!activeSector || !model.sectors.some(s => s.name === activeSector)) {
       setActiveSector(model.sectors[0].name)
     }
+    setExpandedStocks(false)  // Reset expanded view when sector changes
   }, [activeSector, model.sectors])
 
   const sector = model.sectors.find(s => s.name === activeSector) || model.sectors[0]
@@ -270,12 +307,13 @@ export default function ActiveEtfPanel() {
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {loading && <span className="text-[10px] text-blue-400">載入中...</span>}
-          {refreshing && <span className="text-[10px] text-blue-400">更新中...</span>}
-          {error && <span className="text-[10px] text-red-400">{error}</span>}
+          {loading && <span className="text-[10px] text-blue-400">📥 載入中...</span>}
+          {modelProcessing && <span className="text-[10px] text-yellow-400">⚙️ 處理中...</span>}
+          {refreshing && <span className="text-[10px] text-blue-400">🔄 更新中...</span>}
+          {error && <span className="text-[10px] text-red-400">❌ {error}</span>}
           <button
             onClick={() => load(true)}
-            disabled={loading || refreshing}
+            disabled={loading || refreshing || modelProcessing}
             className="px-2.5 py-1 text-[10px] rounded border border-[#2A2A2A] text-gray-400 hover:text-white hover:border-[#3A3A3A] disabled:opacity-40"
           >
             重新整理
@@ -372,16 +410,16 @@ export default function ActiveEtfPanel() {
               </div>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-x-auto">
-              <div className="sticky top-0 z-10 grid grid-cols-[60px_minmax(140px,1fr)_90px_80px_1fr] gap-3 px-4 py-2 bg-[#101214] border-b border-[#1A1A1A] text-[10px] font-semibold text-gray-500 top-[70px]">
+            <div className="flex-1 min-h-0 overflow-x-auto flex flex-col">
+              <div className="sticky top-0 z-10 grid grid-cols-[60px_minmax(140px,1fr)_90px_80px_1fr] gap-3 px-4 py-2 bg-[#101214] border-b border-[#1A1A1A] text-[10px] font-semibold text-gray-500">
                 <div>代號</div>
                 <div>公司名稱</div>
                 <div className="text-right">累計占比</div>
                 <div className="text-right">ETF數</div>
                 <div>各ETF占比</div>
               </div>
-              <div className="divide-y divide-[#111]">
-                {sector.stocks.map((stock, idx) => (
+              <div className="divide-y divide-[#111] overflow-y-auto">
+                {sector.stocks.slice(0, expandedStocks ? undefined : 50).map((stock, idx) => (
                   <div
                     key={stock.code}
                     className={`grid grid-cols-[60px_minmax(140px,1fr)_90px_80px_1fr] gap-3 px-4 py-2.5 text-[10px] transition-colors ${
@@ -407,6 +445,16 @@ export default function ActiveEtfPanel() {
                   </div>
                 ))}
               </div>
+              {!expandedStocks && sector.stocks.length > 50 && (
+                <div className="px-4 py-3 text-center border-t border-[#1A1A1A] bg-[#0A0D0F]">
+                  <button
+                    onClick={() => setExpandedStocks(true)}
+                    className="text-[10px] px-3 py-1.5 rounded border border-[#2A4A5A] text-blue-400 hover:bg-[#1a3a4a] transition-colors"
+                  >
+                    查看全部 {sector.stocks.length} 檔成分股
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="flex-shrink-0 px-4 py-2 text-[9px] text-gray-700 border-t border-[#1A1A1A] bg-[#080A0D]">
