@@ -20,6 +20,120 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = os.path.join(os.getenv("DATA_DIR", os.path.dirname(__file__)), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+# ─── Bulk quote cache (TWSE + TPEX) ──────────────────────────────────────────
+# One API call fetches ALL stocks; we cache for 5 min and serve individual lookups
+_bulk_cache: dict = {"twse": {}, "tpex": {}, "twse_ts": 0.0, "tpex_ts": 0.0}
+_BULK_TTL = 300  # 5 minutes
+
+
+def _load_twse_bulk() -> dict:
+    """Fetch all TWSE current-day quotes in one call. Returns {code: {price,change,change_pct,volume}}"""
+    now = time.time()
+    if now - _bulk_cache["twse_ts"] < _BULK_TTL and _bulk_cache["twse"]:
+        return _bulk_cache["twse"]
+    try:
+        # TWSE Open Data: daily trading summary for ALL stocks
+        resp = requests.get(
+            "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=15, verify=False,
+        )
+        rows = resp.json()
+        data: dict = {}
+        for r in rows:
+            code  = str(r.get("Code", "")).strip()
+            close = r.get("ClosingPrice", "") or r.get("closing_price", "")
+            open_ = r.get("OpeningPrice", "") or r.get("opening_price", "")
+            vol   = r.get("TradeVolume", "0") or "0"
+            chg   = r.get("Change", "") or ""
+            if not code or not close:
+                continue
+            try:
+                close_f  = float(str(close).replace(",", ""))
+                change_f = float(str(chg).replace(",", "").replace("+", "")) if chg else 0.0
+                prev_f   = close_f - change_f
+                chg_pct  = (change_f / prev_f * 100) if prev_f else 0.0
+                data[code] = {
+                    "price":      round(close_f, 4),
+                    "change":     round(change_f, 4),
+                    "change_pct": round(chg_pct, 2),
+                    "volume":     int(str(vol).replace(",", "")),
+                }
+            except (ValueError, ZeroDivisionError):
+                continue
+        if data:
+            _bulk_cache["twse"] = data
+            _bulk_cache["twse_ts"] = now
+            logger.info("TWSE bulk: loaded %d stocks", len(data))
+        return data
+    except Exception as e:
+        logger.warning("TWSE bulk fetch failed: %s", e)
+        return _bulk_cache["twse"]   # return stale if available
+
+
+def _load_tpex_bulk() -> dict:
+    """Fetch all TPEX (OTC) current-day quotes in one call. Returns {code: {price,...}}"""
+    now = time.time()
+    if now - _bulk_cache["tpex_ts"] < _BULK_TTL and _bulk_cache["tpex"]:
+        return _bulk_cache["tpex"]
+    try:
+        resp = requests.get(
+            "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=15, verify=False,
+        )
+        rows = resp.json()
+        data: dict = {}
+        for r in rows:
+            code  = str(r.get("SecuritiesCompanyCode", "") or r.get("Code", "")).strip()
+            close = r.get("Close", "") or r.get("ClosingPrice", "")
+            chg   = r.get("Change", "") or ""
+            vol   = r.get("TradeVolume", "0") or "0"
+            if not code or not close or str(close).strip() in ("", "-", "---"):
+                continue
+            try:
+                close_f  = float(str(close).replace(",", ""))
+                change_f = float(str(chg).replace(",", "").replace("+", "")) if chg and str(chg).strip() not in ("-", "---") else 0.0
+                prev_f   = close_f - change_f
+                chg_pct  = (change_f / prev_f * 100) if prev_f else 0.0
+                data[code] = {
+                    "price":      round(close_f, 4),
+                    "change":     round(change_f, 4),
+                    "change_pct": round(chg_pct, 2),
+                    "volume":     int(str(vol).replace(",", "")),
+                }
+            except (ValueError, ZeroDivisionError):
+                continue
+        if data:
+            _bulk_cache["tpex"] = data
+            _bulk_cache["tpex_ts"] = now
+            logger.info("TPEX bulk: loaded %d stocks", len(data))
+        return data
+    except Exception as e:
+        logger.warning("TPEX bulk fetch failed: %s", e)
+        return _bulk_cache["tpex"]
+
+
+def _get_tw_bulk_quote(symbol: str) -> dict | None:
+    """Look up a Taiwan stock quote from the bulk TWSE/TPEX cache.
+    OTC stocks (.TWO) try TPEX first; TWSE stocks try main-board first."""
+    code   = symbol.split(".")[0]
+    suffix = symbol.upper().rsplit(".", 1)[-1]
+
+    # Route OTC stocks to TPEX first for efficiency
+    if suffix == "TWO":
+        loaders = [(_load_tpex_bulk, "TPEX"), (_load_twse_bulk, "TWSE")]
+    else:
+        loaders = [(_load_twse_bulk, "TWSE"), (_load_tpex_bulk, "TPEX")]
+
+    for loader, label in loaders:
+        bulk = loader()
+        if code in bulk:
+            logger.info("Bulk %s quote for %s: %.2f", label, symbol, bulk[code]["price"])
+            return bulk[code]
+
+    return None
+
 # Cache TTL per interval type (seconds)
 CACHE_TTL = {
     "1d": 300,    # 5 min during market hours
@@ -348,9 +462,10 @@ def get_quote(symbol: str) -> dict:
     Get latest price and change info.
     Priority:
       Taiwan stocks (.TW / .TWO):
-        1. TWSE MIS real-time API  — fastest, works in/after market hours
-        2. TWSE/TPEX monthly data  — reliable fallback (today's date, not May 1)
-        3. yfinance                — last resort (rate-limited on Railway)
+        1. Bulk TWSE/TPEX Open Data  — one cached API call covers ALL stocks (fast)
+        2. TWSE MIS real-time API    — per-stock real-time fallback
+        3. TWSE/TPEX monthly data    — reliable fallback (today's date, not May 1)
+        4. yfinance                  — last resort (rate-limited on Railway)
       US / other stocks:
         1. yfinance history(5d)
     """
@@ -358,18 +473,24 @@ def get_quote(symbol: str) -> dict:
     is_tw = upper.endswith(".TW") or upper.endswith(".TWO")
 
     if is_tw:
-        # ── TW Step 1: MIS real-time ─────────────────────────────────────────
+        # ── TW Step 1: Bulk TWSE/TPEX (one cached call for all stocks) ───────
+        q = _get_tw_bulk_quote(symbol)
+        if q:
+            return q
+
+        # ── TW Step 2: MIS real-time ─────────────────────────────────────────
+        logger.info("Bulk failed for %s, trying MIS real-time...", symbol)
         q = _get_tw_mis_quote(symbol)
         if q:
             return q
 
-        # ── TW Step 2: TWSE/TPEX monthly (fixed date) ───────────────────────
+        # ── TW Step 3: TWSE/TPEX monthly (fixed date) ───────────────────────
         logger.info("MIS failed for %s, trying TWSE monthly...", symbol)
         q = _get_tw_quote_from_twse(symbol)
         if q:
             return q
 
-        # ── TW Step 3: yfinance ──────────────────────────────────────────────
+        # ── TW Step 4: yfinance ──────────────────────────────────────────────
         logger.info("TWSE failed for %s, trying yfinance...", symbol)
 
     # US stocks (and TW fallback)
