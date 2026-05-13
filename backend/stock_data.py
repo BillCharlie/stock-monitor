@@ -532,9 +532,14 @@ def df_to_ohlcv_list(df: pd.DataFrame) -> list:
     return records
 
 
-# ─── Investor / institutional data ────────────────────────────────────────────
+# ─── Chip data: 三大法人 + 融資融券 ────────────────────────────────────────────
+# Primary:  FinMind API  (finmindtrade.com) — single endpoint, TWSE+TPEX unified
+# Fallback: TWSE / TPEX direct exchange APIs
 
-INVESTORS_CACHE_TTL = 3600  # 1 hour per day-file
+INVESTORS_CACHE_TTL = 3600   # 1 hour
+
+_FINMIND_URL   = "https://api.finmindtrade.com/api/v4/data"
+_FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")   # optional; raises rate limit
 
 
 def _parse_tw_number(s) -> int:
@@ -544,136 +549,93 @@ def _parse_tw_number(s) -> int:
         return 0
 
 
-def _fetch_twse_three_forces(date_str: str) -> dict:
-    """Fetch TWSE 三大法人 buy/sell data for one date. Cached per date."""
-    cache_path = os.path.join(CACHE_DIR, f"twse_3f_{date_str}.json")
+# ── FinMind helpers ───────────────────────────────────────────────────────────
+
+def _fm_request(dataset: str, stock_id: str, start_date: str, end_date: str) -> list:
+    """Call FinMind v4 data API. Returns list of row-dicts or [] on failure."""
+    params: dict = {
+        "dataset":    dataset,
+        "data_id":    stock_id,
+        "start_date": start_date,
+        "end_date":   end_date,
+    }
+    if _FINMIND_TOKEN:
+        params["token"] = _FINMIND_TOKEN
+    try:
+        resp = requests.get(_FINMIND_URL, params=params, timeout=20)
+        resp.raise_for_status()
+        j = resp.json()
+        if int(j.get("status", 0)) != 200:
+            logger.warning("FinMind %s %s: %s", dataset, stock_id, j.get("msg", ""))
+            return []
+        return j.get("data", [])
+    except Exception as e:
+        logger.warning("FinMind request failed %s %s: %s", dataset, stock_id, e)
+        return []
+
+
+def _fm_three_forces(code: str, days: int = 5) -> list:
+    """
+    FinMind TaiwanStockInstitutionalInvestorsBuySell → 5-day 三大法人 list.
+    Returns list of dicts newest-first:
+        {date, foreign_net, trust_net, dealer_net, total_net}
+    """
+    cache_path = os.path.join(CACHE_DIR, f"fm_3f_{code}.json")
     if os.path.exists(cache_path):
         age = time.time() - os.path.getmtime(cache_path)
         if age < INVESTORS_CACHE_TTL:
             try:
                 with open(cache_path, encoding="utf-8") as f:
-                    data = json.load(f)
-                if data:
-                    return data
+                    cached = json.load(f)
+                if cached:
+                    return cached
             except Exception:
                 pass
 
-    url = (
-        "https://www.twse.com.tw/rwd/zh/fund/T86"
-        f"?date={date_str}&selectType=ALLBUT0999&response=json"
+    end_dt   = datetime.now()
+    start_dt = end_dt - timedelta(days=20)   # ~14 calendar days → ≥5 trading days
+    rows = _fm_request(
+        "TaiwanStockInstitutionalInvestorsBuySell",
+        code,
+        start_dt.strftime("%Y-%m-%d"),
+        end_dt.strftime("%Y-%m-%d"),
     )
-    try:
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-        resp.raise_for_status()
-        raw = resp.json()
-    except Exception as e:
-        logger.warning("TWSE T86 fetch failed %s: %s", date_str, e)
-        return {}
-
-    if raw.get("stat") not in ("OK", "ok"):
-        return {}
-
-    fields: list = raw.get("fields", [])
-    rows: list = raw.get("data", [])
-
-    def fi(name: str) -> int:
-        try:
-            return fields.index(name)
-        except ValueError:
-            return -1
-
-    i_code    = fi("證券代號")
-    i_foreign = fi("外陸資買賣超股數")
-    i_trust   = fi("投信買賣超股數")
-    i_dealer  = fi("自營商買賣超股數")   # first occurrence = 合計
-    i_total   = fi("三大法人買賣超股數")
-
-    # Positional fallback if field names differ
-    if i_code < 0:   i_code    = 0
-    if i_foreign < 0: i_foreign = 4
-    if i_trust < 0:  i_trust   = 7
-    if i_dealer < 0: i_dealer  = 8
-    if i_total < 0:  i_total   = 15
-
-    result: dict = {}
-    for row in rows:
-        if len(row) <= max(i_code, i_foreign, i_trust, i_dealer, i_total):
-            continue
-        code = str(row[i_code]).strip()
-        result[code] = {
-            "foreign_net": _parse_tw_number(row[i_foreign]),
-            "trust_net":   _parse_tw_number(row[i_trust]),
-            "dealer_net":  _parse_tw_number(row[i_dealer]),
-            "total_net":   _parse_tw_number(row[i_total]),
-        }
-
-    if result:
-        try:
-            with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump(result, f)
-        except Exception:
-            pass
-
-    return result
-
-
-def _fetch_tpex_three_forces(date_str: str) -> dict:
-    """Fetch TPEX (OTC) 三大法人 buy/sell data for one date. Cached per date.
-    date_str: YYYYMMDD"""
-    cache_path = os.path.join(CACHE_DIR, f"tpex_3f_{date_str}.json")
-    if os.path.exists(cache_path):
-        age = time.time() - os.path.getmtime(cache_path)
-        if age < INVESTORS_CACHE_TTL:
-            try:
-                with open(cache_path, encoding="utf-8") as f:
-                    data = json.load(f)
-                if data:
-                    return data
-            except Exception:
-                pass
-
-    try:
-        dt      = datetime.strptime(date_str, "%Y%m%d")
-        roc_str = f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"
-    except ValueError:
-        return {}
-
-    url = "https://www.tpex.org.tw/web/stock/fund/inst_trading/inst_trading_result.php"
-    try:
-        resp = requests.get(
-            url,
-            params={"l": "zh-tw", "o": "json", "d": roc_str, "se": "EW", "s": "0,asc,0"},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15, verify=False,
-        )
-        resp.raise_for_status()
-        raw = resp.json()
-    except Exception as e:
-        logger.warning("TPEX inst trading fetch failed %s: %s", date_str, e)
-        return {}
-
-    rows = raw.get("aaData", [])
     if not rows:
-        return {}
+        return []
 
-    # aaData cols: 0=代號,1=名稱,2=外資買,3=外資賣,4=外資超,5=投信買,6=投信賣,7=投信超,
-    #              8=自營買(自行),9=自營賣(自行),10=自營超(自行),
-    #              11=自營買(避險),12=自營賣(避險),13=自營超(避險),14=三大合計
-    result: dict = {}
-    for row in rows:
-        try:
-            code = str(row[0]).strip()
-            if not code or len(row) < 15:
-                continue
-            result[code] = {
-                "foreign_net": _parse_tw_number(row[4]),
-                "trust_net":   _parse_tw_number(row[7]),
-                "dealer_net":  _parse_tw_number(row[10]),
-                "total_net":   _parse_tw_number(row[14]),
-            }
-        except (IndexError, ValueError):
-            continue
+    # Aggregate per date: multiple rows per date (one per institution type)
+    from collections import defaultdict
+    by_date: dict = defaultdict(lambda: {"foreign": 0, "trust": 0, "dealer": 0})
+    for r in rows:
+        date_key = str(r.get("date", ""))[:10]
+        name     = str(r.get("name", ""))
+        buy      = int(r.get("buy",  0) or 0)
+        sell     = int(r.get("sell", 0) or 0)
+        net      = buy - sell
+        if "Foreign_Investor" in name:
+            by_date[date_key]["foreign"] += net     # covers base + hedging
+        elif name == "Investment_Trust":
+            by_date[date_key]["trust"]  = net
+        elif "Dealer" in name:
+            # Prefer the aggregated "Dealer" row; if we see Dealer_self/Hedging,
+            # accumulate — the aggregate row will overwrite later if present.
+            by_date[date_key]["dealer"] += net
 
+    result = []
+    for dk in sorted(by_date.keys(), reverse=True):
+        d = by_date[dk]
+        foreign = d["foreign"]
+        trust   = d["trust"]
+        dealer  = d["dealer"]
+        result.append({
+            "date":        dk,
+            "foreign_net": foreign,
+            "trust_net":   trust,
+            "dealer_net":  dealer,
+            "total_net":   foreign + trust + dealer,
+        })
+
+    result = result[:days]
     if result:
         try:
             with open(cache_path, "w", encoding="utf-8") as f:
@@ -683,58 +645,52 @@ def _fetch_tpex_three_forces(date_str: str) -> dict:
     return result
 
 
-def _fetch_twse_margin(date_str: str) -> dict:
-    """TWSE 融資融券 bulk for one date. Returns {code: {...}}"""
-    cache_path = os.path.join(CACHE_DIR, f"twse_margin_{date_str}.json")
+def _fm_margin(code: str, days: int = 5) -> list:
+    """
+    FinMind TaiwanStockMarginPurchaseShortSale → 5-day 融資融券 list.
+    Returns list of dicts newest-first:
+        {date, margin_buy, margin_sell, margin_bal,
+         short_sell, short_buy, short_bal, margin_short_ratio}
+    """
+    cache_path = os.path.join(CACHE_DIR, f"fm_margin_{code}.json")
     if os.path.exists(cache_path):
         age = time.time() - os.path.getmtime(cache_path)
         if age < INVESTORS_CACHE_TTL:
             try:
                 with open(cache_path, encoding="utf-8") as f:
-                    data = json.load(f)
-                if data:
-                    return data
+                    cached = json.load(f)
+                if cached:
+                    return cached
             except Exception:
                 pass
 
-    try:
-        resp = requests.get(
-            "https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN",
-            params={"date": date_str, "selectType": "ALL", "response": "json"},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15, verify=False,
-        )
-        resp.raise_for_status()
-        raw = resp.json()
-    except Exception as e:
-        logger.warning("TWSE margin fetch failed %s: %s", date_str, e)
-        return {}
+    end_dt   = datetime.now()
+    start_dt = end_dt - timedelta(days=20)
+    rows = _fm_request(
+        "TaiwanStockMarginPurchaseShortSale",
+        code,
+        start_dt.strftime("%Y-%m-%d"),
+        end_dt.strftime("%Y-%m-%d"),
+    )
+    if not rows:
+        return []
 
-    if raw.get("stat") not in ("OK", "ok"):
-        return {}
+    result = []
+    for r in sorted(rows, key=lambda x: x.get("date", ""), reverse=True):
+        m_bal = int(r.get("MarginPurchaseTodayBalance", 0) or 0)
+        s_bal = int(r.get("ShortSaleTodayBalance",      0) or 0)
+        result.append({
+            "date":               str(r.get("date", ""))[:10],
+            "margin_buy":         int(r.get("MarginPurchaseBuy",  0) or 0),
+            "margin_sell":        int(r.get("MarginPurchaseSell", 0) or 0),
+            "margin_bal":         m_bal,
+            "short_sell":         int(r.get("ShortSaleSell", 0) or 0),
+            "short_buy":          int(r.get("ShortSaleBuy",  0) or 0),
+            "short_bal":          s_bal,
+            "margin_short_ratio": round(m_bal / s_bal, 2) if s_bal else None,
+        })
 
-    # fields: 股票代號,股票名稱,融資買進,融資賣出,融資現償,融資餘額,融資限額,
-    #         融券賣出,融券買進,融券現償,融券餘額,融券限額,資券相抵,備註
-    result: dict = {}
-    for row in raw.get("data", []):
-        try:
-            code = str(row[0]).strip()
-            if not code or len(row) < 13:
-                continue
-            m_bal = _parse_tw_number(row[5])
-            s_bal = _parse_tw_number(row[10])
-            result[code] = {
-                "margin_buy":          _parse_tw_number(row[2]),
-                "margin_sell":         _parse_tw_number(row[3]),
-                "margin_bal":          m_bal,
-                "short_sell":          _parse_tw_number(row[7]),
-                "short_buy":           _parse_tw_number(row[8]),
-                "short_bal":           s_bal,
-                "margin_short_ratio":  round(m_bal / s_bal, 2) if s_bal else None,
-            }
-        except (IndexError, ValueError, ZeroDivisionError):
-            continue
-
+    result = result[:days]
     if result:
         try:
             with open(cache_path, "w", encoding="utf-8") as f:
@@ -744,126 +700,290 @@ def _fetch_twse_margin(date_str: str) -> dict:
     return result
 
 
-def _fetch_tpex_margin(date_str: str) -> dict:
-    """TPEX (OTC) 融資融券 bulk for one date."""
-    cache_path = os.path.join(CACHE_DIR, f"tpex_margin_{date_str}.json")
-    if os.path.exists(cache_path):
-        age = time.time() - os.path.getmtime(cache_path)
-        if age < INVESTORS_CACHE_TTL:
-            try:
-                with open(cache_path, encoding="utf-8") as f:
-                    data = json.load(f)
-                if data:
-                    return data
-            except Exception:
-                pass
+# ── TWSE / TPEX direct APIs (fallback only) ──────────────────────────────────
 
-    try:
-        dt      = datetime.strptime(date_str, "%Y%m%d")
-        roc_str = f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"
-    except ValueError:
-        return {}
-
-    try:
-        resp = requests.get(
-            "https://www.tpex.org.tw/web/stock/margin_trading/margin_balance/margin_bal_result.php",
-            params={"l": "zh-tw", "o": "json", "d": roc_str, "se": "EW"},
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=15, verify=False,
-        )
-        resp.raise_for_status()
-        raw = resp.json()
-    except Exception as e:
-        logger.warning("TPEX margin fetch failed %s: %s", date_str, e)
-        return {}
-
-    # aaData cols: 0=代號,1=名稱,2=融資買進,3=融資賣出,4=融資現償,5=前日融資,6=今日融資餘額,7=限額,
-    #              8=融券賣出,9=融券買進,10=融券現償,11=前日融券,12=今日融券餘額,13=限額,14=資券相抵
-    result: dict = {}
-    for row in raw.get("aaData", []):
-        try:
-            code = str(row[0]).strip()
-            if not code or len(row) < 13:
-                continue
-            m_bal = _parse_tw_number(row[6])
-            s_bal = _parse_tw_number(row[12])
-            result[code] = {
-                "margin_buy":          _parse_tw_number(row[2]),
-                "margin_sell":         _parse_tw_number(row[3]),
-                "margin_bal":          m_bal,
-                "short_sell":          _parse_tw_number(row[8]),
-                "short_buy":           _parse_tw_number(row[9]),
-                "short_bal":           s_bal,
-                "margin_short_ratio":  round(m_bal / s_bal, 2) if s_bal else None,
-            }
-        except (IndexError, ValueError, ZeroDivisionError):
-            continue
-
-    if result:
-        try:
-            with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump(result, f)
-        except Exception:
-            pass
-    return result
-
-
-def _get_tw_investors(symbol: str) -> dict:
-    """Return 三大法人 trend (last 5 trading days). Supports both TWSE and TPEX."""
-    code    = symbol.split(".")[0]
-    is_otc  = symbol.upper().endswith(".TWO")
-    fetch_fn = _fetch_tpex_three_forces if is_otc else _fetch_twse_three_forces
-
-    trend: list = []
+def _twse_three_forces_fallback(code: str) -> list:
+    """TWSE T86 day-by-day fallback for 三大法人. Returns 5-day list newest-first."""
+    result = []
     d = datetime.now()
     attempts = 0
-    while len(trend) < 5 and attempts < 20:
+    while len(result) < 5 and attempts < 20:
         if d.weekday() < 5:
-            date_str = d.strftime("%Y%m%d")
-            day_data = fetch_fn(date_str)
+            date_str   = d.strftime("%Y%m%d")
+            cache_path = os.path.join(CACHE_DIR, f"twse_3f_{date_str}.json")
+            day_data: dict = {}
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, encoding="utf-8") as f:
+                        day_data = json.load(f)
+                except Exception:
+                    pass
+            if not day_data:
+                url = (
+                    "https://www.twse.com.tw/rwd/zh/fund/T86"
+                    f"?date={date_str}&selectType=ALLBUT0999&response=json"
+                )
+                try:
+                    raw = requests.get(url, headers={"User-Agent": "Mozilla/5.0"},
+                                       timeout=15).json()
+                    if raw.get("stat") in ("OK", "ok"):
+                        fields = raw.get("fields", [])
+                        def fi(n):
+                            try: return fields.index(n)
+                            except ValueError: return -1
+                        ic = fi("證券代號") if fi("證券代號") >= 0 else 0
+                        iF = fi("外陸資買賣超股數") if fi("外陸資買賣超股數") >= 0 else 4
+                        iT = fi("投信買賣超股數")   if fi("投信買賣超股數")   >= 0 else 7
+                        iD = fi("自營商買賣超股數") if fi("自營商買賣超股數") >= 0 else 8
+                        iN = fi("三大法人買賣超股數") if fi("三大法人買賣超股數") >= 0 else 15
+                        for row in raw.get("data", []):
+                            c = str(row[ic]).strip()
+                            day_data[c] = {
+                                "foreign_net": _parse_tw_number(row[iF]),
+                                "trust_net":   _parse_tw_number(row[iT]),
+                                "dealer_net":  _parse_tw_number(row[iD]),
+                                "total_net":   _parse_tw_number(row[iN]),
+                            }
+                        try:
+                            with open(cache_path, "w", encoding="utf-8") as f:
+                                json.dump(day_data, f)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.debug("TWSE T86 fallback %s: %s", date_str, e)
             if code in day_data:
                 entry = dict(day_data[code])
                 entry["date"] = d.strftime("%Y-%m-%d")
-                trend.append(entry)
+                result.append(entry)
         d -= timedelta(days=1)
         attempts += 1
+    return result
+
+
+def _tpex_three_forces_fallback(code: str) -> list:
+    """TPEX OTC inst-trading day-by-day fallback for 三大法人. Returns newest-first."""
+    result = []
+    d = datetime.now()
+    attempts = 0
+    while len(result) < 5 and attempts < 20:
+        if d.weekday() < 5:
+            date_str   = d.strftime("%Y%m%d")
+            cache_path = os.path.join(CACHE_DIR, f"tpex_3f_{date_str}.json")
+            day_data: dict = {}
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, encoding="utf-8") as f:
+                        day_data = json.load(f)
+                except Exception:
+                    pass
+            if not day_data:
+                try:
+                    dt      = datetime.strptime(date_str, "%Y%m%d")
+                    roc_str = f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"
+                    raw = requests.get(
+                        "https://www.tpex.org.tw/web/stock/fund/inst_trading/inst_trading_result.php",
+                        params={"l": "zh-tw", "o": "json", "d": roc_str, "se": "EW", "s": "0,asc,0"},
+                        headers={"User-Agent": "Mozilla/5.0"},
+                        timeout=15, verify=False,
+                    ).json()
+                    for row in raw.get("aaData", []):
+                        c = str(row[0]).strip()
+                        if c and len(row) >= 15:
+                            day_data[c] = {
+                                "foreign_net": _parse_tw_number(row[4]),
+                                "trust_net":   _parse_tw_number(row[7]),
+                                "dealer_net":  _parse_tw_number(row[10]),
+                                "total_net":   _parse_tw_number(row[14]),
+                            }
+                    try:
+                        with open(cache_path, "w", encoding="utf-8") as f:
+                            json.dump(day_data, f)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logger.debug("TPEX 3F fallback %s: %s", date_str, e)
+            if code in day_data:
+                entry = dict(day_data[code])
+                entry["date"] = d.strftime("%Y-%m-%d")
+                result.append(entry)
+        d -= timedelta(days=1)
+        attempts += 1
+    return result
+
+
+def _twse_margin_fallback(code: str) -> list:
+    """TWSE MI_MARGN day-by-day fallback for 融資融券. Returns newest-first."""
+    result = []
+    d = datetime.now()
+    attempts = 0
+    while len(result) < 5 and attempts < 20:
+        if d.weekday() < 5:
+            date_str   = d.strftime("%Y%m%d")
+            cache_path = os.path.join(CACHE_DIR, f"twse_margin_{date_str}.json")
+            day_data: dict = {}
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, encoding="utf-8") as f:
+                        day_data = json.load(f)
+                except Exception:
+                    pass
+            if not day_data:
+                try:
+                    raw = requests.get(
+                        "https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN",
+                        params={"date": date_str, "selectType": "ALL", "response": "json"},
+                        headers={"User-Agent": "Mozilla/5.0"},
+                        timeout=15, verify=False,
+                    ).json()
+                    if raw.get("stat") in ("OK", "ok"):
+                        for row in raw.get("data", []):
+                            c = str(row[0]).strip()
+                            if c and len(row) >= 13:
+                                mb = _parse_tw_number(row[5])
+                                sb = _parse_tw_number(row[10])
+                                day_data[c] = {
+                                    "margin_buy": _parse_tw_number(row[2]),
+                                    "margin_sell": _parse_tw_number(row[3]),
+                                    "margin_bal": mb,
+                                    "short_sell": _parse_tw_number(row[7]),
+                                    "short_buy":  _parse_tw_number(row[8]),
+                                    "short_bal":  sb,
+                                    "margin_short_ratio": round(mb / sb, 2) if sb else None,
+                                }
+                        try:
+                            with open(cache_path, "w", encoding="utf-8") as f:
+                                json.dump(day_data, f)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.debug("TWSE margin fallback %s: %s", date_str, e)
+            if code in day_data:
+                entry = dict(day_data[code])
+                entry["date"] = d.strftime("%Y-%m-%d")
+                result.append(entry)
+        d -= timedelta(days=1)
+        attempts += 1
+    return result
+
+
+def _tpex_margin_fallback(code: str) -> list:
+    """TPEX margin_bal day-by-day fallback for 融資融券. Returns newest-first."""
+    result = []
+    d = datetime.now()
+    attempts = 0
+    while len(result) < 5 and attempts < 20:
+        if d.weekday() < 5:
+            date_str   = d.strftime("%Y%m%d")
+            cache_path = os.path.join(CACHE_DIR, f"tpex_margin_{date_str}.json")
+            day_data: dict = {}
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, encoding="utf-8") as f:
+                        day_data = json.load(f)
+                except Exception:
+                    pass
+            if not day_data:
+                try:
+                    dt      = datetime.strptime(date_str, "%Y%m%d")
+                    roc_str = f"{dt.year - 1911}/{dt.month:02d}/{dt.day:02d}"
+                    raw = requests.get(
+                        "https://www.tpex.org.tw/web/stock/margin_trading/margin_balance/margin_bal_result.php",
+                        params={"l": "zh-tw", "o": "json", "d": roc_str, "se": "EW"},
+                        headers={"User-Agent": "Mozilla/5.0"},
+                        timeout=15, verify=False,
+                    ).json()
+                    for row in raw.get("aaData", []):
+                        c = str(row[0]).strip()
+                        if c and len(row) >= 13:
+                            mb = _parse_tw_number(row[6])
+                            sb = _parse_tw_number(row[12])
+                            day_data[c] = {
+                                "margin_buy": _parse_tw_number(row[2]),
+                                "margin_sell": _parse_tw_number(row[3]),
+                                "margin_bal": mb,
+                                "short_sell": _parse_tw_number(row[8]),
+                                "short_buy":  _parse_tw_number(row[9]),
+                                "short_bal":  sb,
+                                "margin_short_ratio": round(mb / sb, 2) if sb else None,
+                            }
+                        try:
+                            with open(cache_path, "w", encoding="utf-8") as f:
+                                json.dump(day_data, f)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.debug("TPEX margin fallback %s: %s", date_str, e)
+            if code in day_data:
+                entry = dict(day_data[code])
+                entry["date"] = d.strftime("%Y-%m-%d")
+                result.append(entry)
+        d -= timedelta(days=1)
+        attempts += 1
+    return result
+
+
+# ── Public interface: 三大法人 ────────────────────────────────────────────────
+
+def _get_tw_investors(symbol: str) -> dict:
+    """
+    Return 三大法人 5-day trend for a TW stock.
+    Priority: FinMind → TWSE/TPEX direct fallback
+    """
+    code   = symbol.split(".")[0]
+    is_otc = symbol.upper().endswith(".TWO")
+
+    # 1. Try FinMind (works for both TWSE and TPEX)
+    trend = _fm_three_forces(code)
+
+    # 2. Fallback: direct exchange API
+    if not trend:
+        logger.info("FinMind 三大法人 empty for %s — trying exchange fallback", symbol)
+        trend = (_tpex_three_forces_fallback(code) if is_otc
+                 else _twse_three_forces_fallback(code))
+        for entry in trend:
+            if "total_net" not in entry:
+                entry["total_net"] = (
+                    entry.get("foreign_net", 0)
+                    + entry.get("trust_net", 0)
+                    + entry.get("dealer_net", 0)
+                )
 
     if not trend:
-        return {"type": "tw", "symbol": symbol, "error": "無三大法人資料（非交易日或資料未更新）"}
+        return {"type": "tw", "symbol": symbol,
+                "error": "無三大法人資料（非交易日或資料未更新）"}
 
-    latest = trend[0]
+    latest = trend[0]   # newest
     return {
-        "type":         "tw",
-        "market":       "OTC" if is_otc else "TWSE",
-        "symbol":       symbol,
-        "latest_date":  latest["date"],
-        "foreign_net":  latest["foreign_net"],
-        "trust_net":    latest["trust_net"],
-        "dealer_net":   latest["dealer_net"],
-        "total_net":    latest["total_net"],
-        "trend":        list(reversed(trend)),
+        "type":        "tw",
+        "market":      "OTC" if is_otc else "TWSE",
+        "symbol":      symbol,
+        "latest_date": latest["date"],
+        "foreign_net": latest["foreign_net"],
+        "trust_net":   latest["trust_net"],
+        "dealer_net":  latest["dealer_net"],
+        "total_net":   latest["total_net"],
+        "trend":       list(reversed(trend)),   # oldest→newest for charts
     }
 
 
-def get_tw_margin_data(symbol: str) -> dict:
-    """Return 融資融券 trend (last 5 trading days). Supports both TWSE and TPEX."""
-    code    = symbol.split(".")[0]
-    is_otc  = symbol.upper().endswith(".TWO")
-    fetch_fn = _fetch_tpex_margin if is_otc else _fetch_twse_margin
+# ── Public interface: 融資融券 ────────────────────────────────────────────────
 
-    trend: list = []
-    d = datetime.now()
-    attempts = 0
-    while len(trend) < 5 and attempts < 20:
-        if d.weekday() < 5:
-            date_str = d.strftime("%Y%m%d")
-            day_data = fetch_fn(date_str)
-            if code in day_data:
-                entry = dict(day_data[code])
-                entry["date"] = d.strftime("%Y-%m-%d")
-                trend.append(entry)
-        d -= timedelta(days=1)
-        attempts += 1
+def get_tw_margin_data(symbol: str) -> dict:
+    """
+    Return 融資融券 5-day trend for a TW stock.
+    Priority: FinMind → TWSE/TPEX direct fallback
+    """
+    code   = symbol.split(".")[0]
+    is_otc = symbol.upper().endswith(".TWO")
+
+    # 1. Try FinMind
+    trend = _fm_margin(code)
+
+    # 2. Fallback: direct exchange API
+    if not trend:
+        logger.info("FinMind margin empty for %s — trying exchange fallback", symbol)
+        trend = (_tpex_margin_fallback(code) if is_otc
+                 else _twse_margin_fallback(code))
 
     if not trend:
         return {"symbol": symbol, "error": "無融資融券資料（非交易日或資料未更新）"}
@@ -880,7 +1000,7 @@ def get_tw_margin_data(symbol: str) -> dict:
         "short_buy":          latest["short_buy"],
         "short_bal":          latest["short_bal"],
         "margin_short_ratio": latest.get("margin_short_ratio"),
-        "trend":              list(reversed(trend)),
+        "trend":              list(reversed(trend)),  # oldest→newest for charts
     }
 
 
