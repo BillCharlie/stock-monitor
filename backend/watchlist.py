@@ -124,6 +124,56 @@ WATCHLIST = {
             ],
         },
 
+        "TSMC相關股": {
+            "核心台積電鏈": [
+                # ── 台積電集團 / OIP生態 ───────────────────────────────────────────
+                {"symbol": "5347.TWO", "name": "世界先進",   "name_en": "Vanguard International Semiconductor", "tags": ["台積電集團", "成熟製程代工", "8吋廠"]},
+                {"symbol": "3529.TWO", "name": "力旺電子",   "name_en": "eMemory Technology",                   "tags": ["嵌入式NVM IP", "TSMC OIP合作夥伴"]},
+                {"symbol": "6643.TWO", "name": "M31科技",    "name_en": "M31 Technology Corp",                  "tags": ["矽智財 PHY IP", "TSMC OIP生態"]},
+                # ── 先進封裝 / 封測鏈 ─────────────────────────────────────────────
+                {"symbol": "3711.TW",  "name": "日月光投控", "name_en": "ASE Technology Holding",               "tags": ["全球最大封測", "CoWoS/SiP先進封裝"]},
+                {"symbol": "6510.TWO", "name": "精測電子",   "name_en": "Chunghwa Precision Test Tech",         "tags": ["高速探針卡", "HBM/先進封裝測試"]},
+                {"symbol": "6223.TWO", "name": "旺矽科技",   "name_en": "MJC Probe",                            "tags": ["探針卡", "先進封裝測試鏈"]},
+                {"symbol": "3264.TWO", "name": "欣銓科技",   "name_en": "Chipbond Technology",                  "tags": ["驅動IC封測", "CoF/COG"]},
+                # ── 先進製程設備 ───────────────────────────────────────────────────
+                {"symbol": "3131.TWO", "name": "弘塑科技",   "name_en": "Hung Hing Precision Technology",       "tags": ["濕式清洗設備", "CoWoS先進封裝設備"]},
+                {"symbol": "6187.TWO", "name": "萬潤科技",   "name_en": "Wan Jung Technology",                  "tags": ["AOI檢測設備", "CoWoS擴產受益"]},
+                {"symbol": "3680.TWO", "name": "家登精密",   "name_en": "Gudeng Precision Industrial",          "tags": ["EUV光罩盒", "FOUP/FOSB先進製程載具"]},
+                # ── 晶圓材料 ──────────────────────────────────────────────────────
+                {"symbol": "6488.TWO", "name": "環球晶圓",   "name_en": "GlobalWafers",                         "tags": ["矽晶圓全球前三", "台積電上游材料"]},
+                {"symbol": "6182.TWO", "name": "合晶科技",   "name_en": "Sino-American Silicon",                "tags": ["矽晶圓 CZ/FZ", "6\"/8\""]},
+                {"symbol": "4768.TWO", "name": "晶呈科技",   "name_en": "Cryscore Optoelectronic",              "tags": ["SiC研磨材料", "半導體CMP"]},
+                {"symbol": "4772.TWO", "name": "台特化",     "name_en": "Taiwan Speciality Chemicals",          "tags": ["半導體特殊氣體/化學品", "前段濕製程"]},
+                # ── 廠務建設 / 回收鏈 ─────────────────────────────────────────────
+                {"symbol": "5536.TWO", "name": "聖暉企業",   "name_en": "Summit Grand Enterprise",              "tags": ["廠務工程", "無塵室機電", "建廠鏈"]},
+                {"symbol": "1785.TWO", "name": "光洋科技",   "name_en": "Gallant Metals Co.",                   "tags": ["濺鍍靶材", "貴金屬回收", "半導體材料鏈"]},
+                {"symbol": "8390.TWO", "name": "金益鼎",     "name_en": "Chin I Ding Precious Metal",           "tags": ["貴金屬回收", "半導體循環經濟"]},
+            ],
+            "泛半導體間接相關": [
+                # ── IC設計 ────────────────────────────────────────────────────────
+                {"symbol": "5274.TWO", "name": "信驊科技",   "name_en": "Aspeed Technology",                    "tags": ["BMC伺服器管理IC", "AI伺服器半導體"]},
+                {"symbol": "4966.TWO", "name": "譜瑞-KY",    "name_en": "Parade Technologies",                  "tags": ["顯示介面IC", "TCON/eDP"]},
+                {"symbol": "3227.TWO", "name": "原相科技",   "name_en": "PixArt Imaging",                       "tags": ["光學感測器IC", "影像處理"]},
+                {"symbol": "8299.TWO", "name": "群聯電子",   "name_en": "Phison Electronics",                   "tags": ["NAND主控IC", "SSD/eMMC"]},
+                {"symbol": "6104.TWO", "name": "創惟科技",   "name_en": "Genesys Logic",                        "tags": ["USB/橋接控制IC", "PCIe介面"]},
+                # ── 記憶體/儲存 ───────────────────────────────────────────────────
+                {"symbol": "3260.TWO", "name": "威剛科技",   "name_en": "ADATA Technology",                     "tags": ["DRAM模組", "SSD品牌通路"]},
+                # ── 功率/III-V半導體 ──────────────────────────────────────────────
+                {"symbol": "3707.TWO", "name": "漢磊科技",   "name_en": "Han Lei Technology",                   "tags": ["SiC磊晶代工", "特殊半導體"]},
+                {"symbol": "8255.TWO", "name": "朋程科技",   "name_en": "Anpec Electronics",                    "tags": ["整流橋", "車用電源IC"]},
+                {"symbol": "5425.TWO", "name": "台半",       "name_en": "Taiwan Semiconductor Co.",             "tags": ["功率MOSFET", "分離式元件"]},
+                {"symbol": "3105.TWO", "name": "穩懋半導體", "name_en": "WIN Semiconductors",                   "tags": ["GaN PA", "III-V晶圓代工"]},
+                {"symbol": "8086.TWO", "name": "宏捷科技",   "name_en": "Advanced Wireless Semiconductor",      "tags": ["GaAs PA", "III-V代工"]},
+                {"symbol": "5299.TWO", "name": "杰力科技",   "name_en": "Jetek Semiconductor",                  "tags": ["功率MOSFET", "GaN充電IC"]},
+                {"symbol": "3675.TWO", "name": "德微科技",   "name_en": "De Wei Technology",                    "tags": ["功率離散元件", "MOSFET/整流"]},
+                {"symbol": "3317.TWO", "name": "尼克森微",   "name_en": "Niko Semiconductor",                   "tags": ["功率MOSFET", "小封裝"]},
+                # ── 散熱/光通訊 ───────────────────────────────────────────────────
+                {"symbol": "3324.TWO", "name": "雙鴻科技",   "name_en": "Shuang Hong Technology",               "tags": ["均熱板/散熱板", "AI伺服器散熱"]},
+                {"symbol": "3363.TWO", "name": "上詮",       "name_en": "Compeq Manufacturing",                 "tags": ["光通訊元件", "FPC/軟板"]},
+                {"symbol": "3163.TWO", "name": "波若威",     "name_en": "Powertec Technology",                  "tags": ["光通訊元件", "精密電路板"]},
+            ],
+        },
+
         "科技系統廠": {
             "EMS/AI服務器": [
                 {"symbol": "2317.TW",  "name": "鴻海精密",     "name_en": "Hon Hai Precision (Foxconn)",       "tags": ["全球最大EMS", "AI伺服器/GB200"]},
