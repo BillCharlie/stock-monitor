@@ -116,4 +116,7 @@ export const api = {
 
   getAllEtfHoldings: (refresh = false) =>
     request(`/etf-holdings${refresh ? '?refresh=true' : ''}`),
+
+  getEtfSectorSummary: (refresh = false) =>
+    request(`/etf-holdings/sector-summary${refresh ? '?refresh=true' : ''}`),
 }

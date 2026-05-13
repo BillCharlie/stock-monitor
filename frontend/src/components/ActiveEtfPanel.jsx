@@ -1,49 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api/stocks.js'
 
-const SECTOR_COLORS = {
-  '半導體': '#40C4FF',
-  '科技系統廠': '#26A69A',
-  '電子零組件': '#80DEEA',
-  '其他電子': '#90A4AE',
-  '通信網路': '#64B5F6',
-  '鋼鐵': '#A1887F',
-  '電機機械': '#A5D6A7',
-  '電器電纜': '#FFCC80',
-  '太陽能/綠能': '#FFF176',
-  'AI與雲端': '#7E57C2',
-  '金融': '#CE93D8',
-  '光學': '#80CBC4',
-  '化工/塑化': '#FF7043',
-  '生技醫療': '#B39DDB',
-  '航運': '#4DD0E1',
-  '零售': '#F48FB1',
-  '汽車': '#FFCC80',
-  '水泥': '#BCAAA4',
-  '食品': '#E6EE9C',
-  '建設': '#CFD8DC',
-  '紡織': '#FFAB91',
-  '傳產': '#90A4AE',
-  '其他': '#37474F',
+const CHANGE_LABELS = {
+  day: '1日',
+  week: '1週',
+  month: '1月',
 }
 
-const FALLBACK_COLORS = [
-  '#40C4FF', '#26A69A', '#FF9800', '#CE93D8', '#FFF176', '#80DEEA',
-  '#A1887F', '#B39DDB', '#FF7043', '#90A4AE', '#66BB6A', '#F48FB1',
-]
-
-function sectorColor(name, index = 0) {
-  return SECTOR_COLORS[name] || FALLBACK_COLORS[index % FALLBACK_COLORS.length]
-}
-
-function fmt(value, digits = 1) {
+function fmt(value, digits = 2) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '0'
   return n.toFixed(digits)
 }
 
 function fmtDate(value) {
-  if (!value) return ''
+  if (!value) return '尚無'
   try {
     const d = new Date(value)
     if (!Number.isNaN(d.getTime())) {
@@ -55,212 +26,151 @@ function fmtDate(value) {
   return value
 }
 
-function SvgPieChart({ slices, size = 340, onSliceClick = null, activeSector = '' }) {
-  const total = slices.reduce((sum, s) => sum + s.value, 0)
-  if (!total) return null
+function signed(value, digits = 2, suffix = '') {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '尚無'
+  const sign = n > 0 ? '+' : ''
+  return `${sign}${n.toFixed(digits)}${suffix}`
+}
 
-  const cx = size / 2
-  const cy = size / 2
-  const radius = size * 0.40
-  let angle = -Math.PI / 2
+function changeTone(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n === 0) return 'text-gray-400'
+  return n > 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'
+}
 
-  const paths = slices.filter(s => s.value > 0).map(slice => {
-    const span = (slice.value / total) * Math.PI * 2
-    const end = angle + span
-    const x1 = cx + radius * Math.cos(angle)
-    const y1 = cy + radius * Math.sin(angle)
-    const x2 = cx + radius * Math.cos(end)
-    const y2 = cy + radius * Math.sin(end)
-    const large = span > Math.PI ? 1 : 0
-    const d = `M ${cx} ${cy} L ${x1} ${y1} A ${radius} ${radius} 0 ${large} 1 ${x2} ${y2} Z`
-    
-    // Calculate label position for percentages > 5%
-    const labelAngle = angle + span / 2
-    const labelRadius = radius * 0.65
-    const labelX = cx + labelRadius * Math.cos(labelAngle)
-    const labelY = cy + labelRadius * Math.sin(labelAngle)
-    const pct = slice.value / total * 100
-    
-    const result = { 
-      ...slice, 
-      d, 
-      pct,
-      labelX,
-      labelY,
-      labelAngle
-    }
-    angle = end
-    return result
+function findSliceFromPointer(event, chart) {
+  if (!chart?.slices?.length) return ''
+  const rect = event.currentTarget.getBoundingClientRect()
+  const x = (event.clientX - rect.left) / rect.width * chart.width
+  const y = (event.clientY - rect.top) / rect.height * chart.height
+  const dx = x - chart.center_x
+  const dy = y - chart.center_y
+  const distance = Math.sqrt(dx * dx + dy * dy)
+  if (distance > chart.radius + 28) return ''
+
+  const deg = Math.atan2(dy, dx) * 180 / Math.PI
+  const relative = (deg + 90 + 360) % 360
+  const hit = chart.slices.find(slice => {
+    const start = Number(slice.start_deg)
+    const end = Number(slice.end_deg)
+    if (start <= end) return relative >= start && relative < end
+    return relative >= start || relative < end
   })
+  return hit?.name || ''
+}
 
+function ChangeCard({ label, change }) {
+  const available = change?.available
   return (
-    <svg 
-      width={size} 
-      height={size} 
-      viewBox={`0 0 ${size} ${size}`} 
-      className="block cursor-pointer"
-      style={{ filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.3))' }}
-    >
-      {paths.map((p, index) => (
-        <g key={`${p.label}-${index}`} onClick={() => onSliceClick?.(p.label)}>
-          <path 
-            d={p.d} 
-            fill={p.color} 
-            stroke={activeSector === p.label ? '#FFF' : '#0A0A0A'} 
-            strokeWidth={activeSector === p.label ? '2.5' : '1.5'}
-            opacity={activeSector && activeSector !== p.label ? 0.5 : 1}
-            className="transition-all hover:opacity-100"
-            style={{ cursor: 'pointer' }}
-          >
-            <title>{p.label}: {fmt(p.pct)}%</title>
-          </path>
-          {p.pct > 5 && (
-            <text
-              x={p.labelX}
-              y={p.labelY}
-              textAnchor="middle"
-              dominantBaseline="middle"
-              className="text-[11px] font-bold fill-white pointer-events-none"
-              style={{ textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}
-            >
-              {fmt(p.pct, 1)}%
-            </text>
-          )}
-        </g>
-      ))}
-      <circle cx={cx} cy={cy} r={size * 0.18} fill="#0A0A0A" stroke="#1E2833" strokeWidth="1" />
-      <text x={cx} y={cy - 6} textAnchor="middle" className="fill-gray-200 text-[14px] font-semibold">產業</text>
-      <text x={cx} y={cy + 10} textAnchor="middle" className="fill-gray-600 text-[11px]">配置分佈</text>
-    </svg>
+    <div className="min-w-[92px] flex-1 border border-[#1F2A36] bg-[#0A0F14] px-3 py-2">
+      <div className="text-[10px] text-gray-600">{label}變化</div>
+      <div className={`mt-1 text-sm font-mono font-semibold ${changeTone(change?.delta_pct_points)}`}>
+        {available ? signed(change.delta_pct_points, 2, 'pp') : '尚無基準'}
+      </div>
+      <div className="mt-0.5 text-[9px] text-gray-600">
+        {available ? `基準 ${fmtDate(change.baseline_date)}` : '累積快照後會自動顯示'}
+      </div>
+    </div>
   )
 }
 
-function buildModel(allData) {
-  if (!allData) return { sectors: [], etfSummaries: [], latestDate: '', stockEtfCount: 0, totalPositions: 0, totalWeight: 0, errors: [] }
-  
-  const entries = Object.entries(allData || {})
-  const stockEtfs = entries
-    .filter(([code, info]) => !code.endsWith('D') && info && !info.error && info.holdings?.length)
-    .map(([code, info]) => [code, info])
+function PieChartPng({ summary, activeSector, onSelect }) {
+  const chart = summary?.chart || {}
+  const slices = chart.slices || []
+  const visibleLabels = slices
 
-  if (!stockEtfs.length) {
-    return { sectors: [], etfSummaries: [], latestDate: '', stockEtfCount: 0, totalPositions: 0, totalWeight: 0, errors: entries.filter(([, info]) => info?.error).map(([code, info]) => ({ code, error: info.error })) }
+  const handleClick = (event) => {
+    const name = findSliceFromPointer(event, chart)
+    if (name) onSelect(name)
   }
 
-  const sectorMap = new Map()
-  const etfSummaries = []
-  let latestDate = ''
-  let totalPositions = 0
-
-  // First pass: build sector and stock maps (optimized)
-  for (const [etfCode, etf] of stockEtfs) {
-    const holdings = etf.holdings || []
-    totalPositions += holdings.length
-    if (etf.date && (!latestDate || etf.date > latestDate)) latestDate = etf.date
-
-    const topSectorsList = {}
-    
-    for (const holding of holdings) {
-      const weight = Number(holding.weight_pct) || 0
-      if (weight <= 0) continue
-      
-      const sector = holding.sector || '其他'
-      const color = sectorColor(sector, sectorMap.size)
-
-      if (!sectorMap.has(sector)) {
-        sectorMap.set(sector, {
-          name: sector,
-          color,
-          totalWeight: 0,
-          etfCodes: new Set(),
-          stocks: new Map(),
-        })
-      }
-
-      const sec = sectorMap.get(sector)
-      sec.totalWeight += weight
-      sec.etfCodes.add(etfCode)
-      topSectorsList[sector] = (topSectorsList[sector] || 0) + weight
-
-      const stockCode = holding.stock_code || holding.stock_name || 'UNKNOWN'
-      if (!sec.stocks.has(stockCode)) {
-        sec.stocks.set(stockCode, {
-          code: stockCode,
-          name: holding.stock_name || stockCode,
-          totalWeight: 0,
-          etfs: [],
-        })
-      }
-      const stock = sec.stocks.get(stockCode)
-      stock.totalWeight += weight
-      stock.etfs.push({
-        code: etfCode,
-        name: etf.name || etfCode,
-        weight,
-      })
-    }
-
-    const topSectors = Object.entries(topSectorsList)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 3)
-      .map(([name, weight]) => ({ name, weight }))
-
-    etfSummaries.push({
-      code: etfCode,
-      name: etf.name || etfCode,
-      date: etf.date,
-      holdings: holdings.length,
-      top10Weight: etf.top10_weight,
-      topSectors,
-      topHoldings: holdings.slice(0, 5),
-    })
-  }
-
-  const totalWeight = Array.from(sectorMap.values()).reduce((sum, s) => sum + s.totalWeight, 0)
-  const sectors = Array.from(sectorMap.values())
-    .sort((a, b) => b.totalWeight - a.totalWeight)
-    .map((sector, index) => ({
-      ...sector,
-      color: sectorColor(sector.name, index),
-      pct: totalWeight ? sector.totalWeight / totalWeight * 100 : 0,
-      etfCount: sector.etfCodes.size,
-      stocks: Array.from(sector.stocks.values())
-        .sort((a, b) => b.totalWeight - a.totalWeight)
-        .map(stock => ({
-          ...stock,
-          etfs: stock.etfs.sort((a, b) => b.weight - a.weight),
-        })),
-    }))
-
-  return {
-    sectors,
-    etfSummaries: etfSummaries.sort((a, b) => a.code.localeCompare(b.code)),
-    latestDate,
-    stockEtfCount: stockEtfs.length,
-    totalPositions,
-    totalWeight,
-    errors: entries.filter(([, info]) => info?.error).map(([code, info]) => ({ code, error: info.error })),
-  }
+  return (
+    <div className="relative w-full max-w-[720px] mx-auto">
+      <div
+        className="relative aspect-[720/520] select-none"
+        onClick={handleClick}
+        role="img"
+        aria-label="主動式ETF產業配置總饼圖"
+      >
+        {chart.image ? (
+          <img
+            src={chart.image}
+            alt="主動式ETF產業配置總饼圖"
+            className="absolute inset-0 h-full w-full object-contain"
+            draggable={false}
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-600">
+            尚無可顯示的產業占比
+          </div>
+        )}
+        <div className="absolute left-[36.1%] top-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none">
+          <div className="text-sm font-semibold text-white">產業</div>
+          <div className="text-[10px] text-gray-600">總配置</div>
+        </div>
+        {visibleLabels.map(slice => (
+          <button
+            key={slice.name}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              onSelect(slice.name)
+            }}
+            className={`absolute max-w-[104px] -translate-x-1/2 -translate-y-1/2 rounded border px-1.5 py-0.5 text-[9px] leading-tight shadow-md transition-colors ${
+              activeSector === slice.name
+                ? 'border-white bg-[#111820] text-white'
+                : 'border-[#263340] bg-[#081018]/90 text-gray-200 hover:border-gray-300'
+            }`}
+            style={{
+              left: `${Number(slice.label_x) * 100}%`,
+              top: `${Number(slice.label_y) * 100}%`,
+            }}
+            title={`${slice.name} ${fmt(slice.pct, 1)}%`}
+          >
+            <span className="block truncate">{slice.name}</span>
+            <span className="block font-mono text-[9px]" style={{ color: slice.color }}>{fmt(slice.pct, 1)}%</span>
+          </button>
+        ))}
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-4">
+        {slices.map(slice => (
+          <button
+            key={slice.name}
+            type="button"
+            onClick={() => onSelect(slice.name)}
+            className={`flex items-center gap-1.5 border px-2 py-1 text-left text-[10px] ${
+              activeSector === slice.name
+                ? 'border-cyan-400 bg-[#10202A] text-white'
+                : 'border-[#18222C] bg-[#080C10] text-gray-400 hover:text-white'
+            }`}
+          >
+            <span className="h-2.5 w-2.5 flex-shrink-0" style={{ backgroundColor: slice.color }} />
+            <span className="min-w-0 flex-1 truncate">{slice.name}</span>
+            <span className="font-mono text-gray-500">{fmt(slice.pct, 1)}%</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
 }
 
 export default function ActiveEtfPanel() {
-  const [data, setData] = useState(null)
+  const [summary, setSummary] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [activeSector, setActiveSector] = useState('')
-  const [modelProcessing, setModelProcessing] = useState(false)
-  const [expandedStocks, setExpandedStocks] = useState(false)
 
   const load = useCallback(async (refresh = false) => {
     if (refresh) setRefreshing(true)
     else setLoading(true)
     setError('')
     try {
-      const res = await api.getAllEtfHoldings(refresh)
-      setData(res)
+      const res = await api.getEtfSectorSummary(refresh)
+      setSummary(res)
     } catch (e) {
-      setError('主動式ETF資料載入失敗：' + e.message)
+      setError(`主動式ETF產業資料載入失敗：${e.message}`)
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -269,196 +179,146 @@ export default function ActiveEtfPanel() {
 
   useEffect(() => { load(false) }, [load])
 
-  // Process model with loading indicator
-  const model = useMemo(() => {
-    if (!data) {
-      setModelProcessing(false)
-      return { sectors: [], etfSummaries: [], latestDate: '', stockEtfCount: 0, totalPositions: 0, totalWeight: 0, errors: [] }
-    }
-    setModelProcessing(true)
-    const result = buildModel(data)
-    // Schedule UI update to happen after render
-    queueMicrotask(() => setModelProcessing(false))
-    return result
-  }, [data])
-
+  const sectors = summary?.sectors || []
   useEffect(() => {
-    if (!model.sectors.length) return
-    if (!activeSector || !model.sectors.some(s => s.name === activeSector)) {
-      setActiveSector(model.sectors[0].name)
+    if (!sectors.length) return
+    if (!activeSector || !sectors.some(s => s.name === activeSector)) {
+      setActiveSector(sectors[0].name)
     }
-    setExpandedStocks(false)  // Reset expanded view when sector changes
-  }, [activeSector, model.sectors])
+  }, [activeSector, sectors])
 
-  const sector = model.sectors.find(s => s.name === activeSector) || model.sectors[0]
-  const pieSlices = model.sectors.slice(0, 12).map(s => ({
-    label: s.name,
-    value: s.totalWeight,
-    color: s.color,
-  }))
+  const sector = useMemo(
+    () => sectors.find(s => s.name === activeSector) || sectors[0],
+    [activeSector, sectors],
+  )
 
   return (
-    <div className="flex flex-col h-full bg-[#0A0A0A] text-gray-300">
-      <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2 border-b border-[#1A1A1A] bg-[#0D0D0D]">
+    <div className="flex h-full flex-col bg-[#0A0A0A] text-gray-300">
+      <div className="flex flex-shrink-0 items-center gap-3 border-b border-[#1A1A1A] bg-[#0D0D0D] px-4 py-2">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-white">主動式ETF產業配置</div>
+          <div className="text-sm font-semibold text-white">主動式ETF產業總配置</div>
           <div className="text-[10px] text-gray-600">
-            股票型主動式ETF等權彙整{model.latestDate ? `，最新持股日 ${model.latestDate}` : ''}
+            Python 產生饼圖，股票型主動式ETF等權彙整
+            {summary?.date ? `，最新持股日 ${summary.date}` : ''}
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {loading && <span className="text-[10px] text-blue-400">📥 載入中...</span>}
-          {modelProcessing && <span className="text-[10px] text-yellow-400">⚙️ 處理中...</span>}
-          {refreshing && <span className="text-[10px] text-blue-400">🔄 更新中...</span>}
-          {error && <span className="text-[10px] text-red-400">❌ {error}</span>}
+          {loading && <span className="text-[10px] text-blue-400">載入中...</span>}
+          {refreshing && <span className="text-[10px] text-blue-400">更新中...</span>}
+          {error && <span className="text-[10px] text-red-400">{error}</span>}
           <button
+            type="button"
             onClick={() => load(true)}
-            disabled={loading || refreshing || modelProcessing}
-            className="px-2.5 py-1 text-[10px] rounded border border-[#2A2A2A] text-gray-400 hover:text-white hover:border-[#3A3A3A] disabled:opacity-40"
+            disabled={loading || refreshing}
+            className="rounded border border-[#2A2A2A] px-2.5 py-1 text-[10px] text-gray-400 hover:border-[#3A3A3A] hover:text-white disabled:opacity-40"
           >
             重新整理
           </button>
         </div>
       </div>
 
-      {!loading && !error && model.sectors.length === 0 && (
-        <div className="flex-1 flex items-center justify-center text-xs text-gray-600">
+      {!loading && !error && !sectors.length && (
+        <div className="flex flex-1 items-center justify-center text-xs text-gray-600">
           目前沒有可彙整的股票型主動式ETF持股資料
         </div>
       )}
 
-      {model.sectors.length > 0 && (
-        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_minmax(500px,1.2fr)]">
-          <div className="min-h-0 border-r border-[#1A1A1A] bg-[#0B0D0F] flex flex-col">
-            <div className="px-4 py-3 border-b border-[#1A1A1A]">
-              <div className="text-xs font-semibold text-blue-400 mb-2">📊 點擊圖表選擇產業</div>
-              <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
-                <div>
-                  <div className="text-sm font-semibold text-white">{model.stockEtfCount}</div>
-                  <div className="text-gray-600">股票型ETF</div>
-                </div>
-                <div>
-                  <div className="text-sm font-semibold text-white">{model.sectors.length}</div>
-                  <div className="text-gray-600">產業類別</div>
-                </div>
-                <div>
-                  <div className="text-sm font-semibold text-white">{model.totalPositions}</div>
-                  <div className="text-gray-600">持股數</div>
-                </div>
-              </div>
+      {sectors.length > 0 && sector && (
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="grid grid-cols-1 gap-4 border-b border-[#1A1A1A] bg-[#080A0D] p-4 xl:grid-cols-[minmax(420px,620px)_1fr]">
+            <div className="min-w-0">
+              <PieChartPng summary={summary} activeSector={activeSector} onSelect={setActiveSector} />
             </div>
 
-            <div className="flex-shrink-0 px-2 py-3 flex justify-center border-b border-[#1A1A1A] bg-[#08090B]">
-              <SvgPieChart 
-                slices={pieSlices} 
-                size={300}
-                activeSector={activeSector}
-                onSliceClick={setActiveSector}
-              />
-            </div>
-
-            <div className="flex-1 min-h-0 overflow-y-auto">
-              <div className="px-3 py-2 text-[10px] text-gray-600 sticky top-0 bg-[#0B0D0F] border-b border-[#1A1A1A]">
-                產業列表 ({model.sectors.length})
+            <div className="min-w-0 border border-[#1A1A1A] bg-[#0B0D0F]">
+              <div className="flex items-center gap-3 border-b border-[#1A1A1A] px-4 py-3">
+                <span className="h-4 w-4 flex-shrink-0" style={{ backgroundColor: sector.color }} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-lg font-semibold text-white">{sector.name}</div>
+                  <div className="text-[10px] text-gray-600">
+                    {sector.etf_count} 檔ETF持有，{sector.stock_count} 檔公司，總產業占比
+                    <span className="ml-1 font-mono text-[#FFA726]">{fmt(sector.pct, 2)}%</span>
+                  </div>
+                </div>
               </div>
-              {model.sectors.map(s => (
-                <button
-                  key={s.name}
-                  onClick={() => setActiveSector(s.name)}
-                  className={`w-full px-3 py-2 border-b border-[#111] text-left transition-colors ${
-                    activeSector === s.name 
-                      ? 'bg-[#1a2a38] border-l-2 border-l-cyan-400' 
-                      : 'hover:bg-[#0f1419]'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: s.color }} />
-                    <span className="text-[10px] text-gray-100 flex-1 truncate font-medium">{s.name}</span>
-                    <span className="text-[10px] font-mono text-orange-400">{fmt(s.pct, 1)}%</span>
-                  </div>
-                  <div className="mt-1.5 flex items-center gap-1 text-[9px] text-gray-500">
-                    <span className="flex-1">
-                      {s.etfCount} ETF · {s.stocks.length} 檔成分
-                    </span>
-                    <span className="font-mono">{fmt(s.totalWeight, 1)}</span>
-                  </div>
-                  <div className="mt-1.5 h-1 bg-[#1A1A1A] rounded-full overflow-hidden">
-                    <div 
-                      className="h-full rounded-full transition-all" 
-                      style={{ 
-                        width: `${Math.min(100, s.pct)}%`, 
-                        backgroundColor: s.color,
-                        opacity: activeSector === s.name ? 1 : 0.7
-                      }} 
-                    />
-                  </div>
-                </button>
-              ))}
+
+              <div className="grid grid-cols-3 gap-px border-b border-[#1A1A1A] bg-[#1A1A1A]">
+                <div className="bg-[#0B0D0F] px-3 py-3">
+                  <div className="text-[10px] text-gray-600">彙整權重</div>
+                  <div className="mt-1 font-mono text-lg font-semibold text-white">{fmt(sector.total_weight, 2)}</div>
+                </div>
+                <div className="bg-[#0B0D0F] px-3 py-3">
+                  <div className="text-[10px] text-gray-600">持股列數</div>
+                  <div className="mt-1 font-mono text-lg font-semibold text-white">{sector.positions}</div>
+                </div>
+                <div className="bg-[#0B0D0F] px-3 py-3">
+                  <div className="text-[10px] text-gray-600">前20公司</div>
+                  <div className="mt-1 font-mono text-lg font-semibold text-white">{sector.stocks?.length || 0}</div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 p-3">
+                {Object.entries(CHANGE_LABELS).map(([key, label]) => (
+                  <ChangeCard key={key} label={label} change={sector.changes?.[key]} />
+                ))}
+              </div>
+
+              <div className="border-t border-[#1A1A1A] px-3 py-2 text-[10px] text-gray-600">
+                變化值使用已累積的產業快照比較；尚無1週或1月基準時會先顯示「尚無基準」，後續每日刷新後自動累積。
+              </div>
             </div>
           </div>
 
-          <div className="min-h-0 overflow-y-auto flex flex-col">
-            <div className="flex-shrink-0 px-4 py-3 border-b border-[#1A1A1A] bg-[#0D0D0D] sticky top-0 z-20">
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="w-4 h-4 rounded" style={{ backgroundColor: sector.color }} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-base font-semibold text-white">{sector.name}</div>
-                  <div className="text-[9px] text-gray-500 mt-0.5">
-                    {sector.etfCount} 檔ETF · {sector.stocks.length} 檔成分股 · 彙整占比 <span className="text-orange-400 font-mono">{fmt(sector.pct, 1)}%</span>
-                  </div>
-                </div>
+          <div className="px-4 py-3">
+            <div className="mb-2 flex items-center gap-3">
+              <div className="text-sm font-semibold text-white">{sector.name} 前20公司彙總</div>
+              <div className="text-[10px] text-gray-600">
+                統計該產業中各公司被哪些主動式ETF投資，以及在該產業內的彙總占比
               </div>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-x-auto flex flex-col">
-              <div className="sticky top-0 z-10 grid grid-cols-[60px_minmax(140px,1fr)_90px_80px_1fr] gap-3 px-4 py-2 bg-[#101214] border-b border-[#1A1A1A] text-[10px] font-semibold text-gray-500">
+            <div className="min-w-[880px] overflow-hidden border border-[#1A1A1A]">
+              <div className="grid grid-cols-[44px_86px_minmax(150px,1fr)_94px_100px_76px_minmax(260px,1.8fr)] gap-2 border-b border-[#1A1A1A] bg-[#101214] px-3 py-2 text-[10px] font-semibold text-gray-500">
+                <div>#</div>
                 <div>代號</div>
-                <div>公司名稱</div>
-                <div className="text-right">累計占比</div>
+                <div>公司</div>
+                <div className="text-right">產業內占比</div>
+                <div className="text-right">彙整權重</div>
                 <div className="text-right">ETF數</div>
-                <div>各ETF占比</div>
+                <div>投資的主動ETF</div>
               </div>
-              <div className="divide-y divide-[#111] overflow-y-auto">
-                {sector.stocks.slice(0, expandedStocks ? undefined : 50).map((stock, idx) => (
+              <div className="divide-y divide-[#111]">
+                {(sector.stocks || []).map((stock, index) => (
                   <div
-                    key={stock.code}
-                    className={`grid grid-cols-[60px_minmax(140px,1fr)_90px_80px_1fr] gap-3 px-4 py-2.5 text-[10px] transition-colors ${
-                      idx % 2 === 0 ? 'bg-[#0A0D0F]' : 'bg-[#060809]'
-                    } hover:bg-[#0f1620]`}
+                    key={stock.stock_code || `${stock.stock_name}-${index}`}
+                    className="grid grid-cols-[44px_86px_minmax(150px,1fr)_94px_100px_76px_minmax(260px,1.8fr)] gap-2 px-3 py-2.5 text-[11px] odd:bg-[#080B0E] even:bg-[#060708] hover:bg-[#0F1620]"
                   >
-                    <div className="font-mono font-semibold text-cyan-400">{stock.code}</div>
-                    <div className="truncate text-gray-200 font-medium">{stock.name}</div>
-                    <div className="font-mono text-amber-500 text-right font-semibold">{fmt(stock.totalWeight, 2)}%</div>
-                    <div className="text-right text-gray-500">{stock.etfs.length}</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {stock.etfs.map(etf => (
-                        <div
-                          key={`${stock.code}-${etf.code}`}
-                          className="inline-block px-2 py-1 rounded text-[9px] bg-gradient-to-r from-[#0f1f2e] to-[#0a1218] border border-[#1a2f3f] text-gray-300 hover:border-cyan-500 transition-colors whitespace-nowrap"
-                          title={`${etf.name} (${fmt(etf.weight, 2)}%)`}
+                    <div className="font-mono text-gray-600">{index + 1}</div>
+                    <div className="font-mono font-semibold text-[#40C4FF]">{stock.stock_code}</div>
+                    <div className="truncate text-gray-200">{stock.stock_name}</div>
+                    <div className="text-right font-mono text-[#FFA726]">{fmt(stock.sector_pct, 2)}%</div>
+                    <div className="text-right font-mono text-gray-300">{fmt(stock.total_weight, 2)}</div>
+                    <div className="text-right text-gray-500">{stock.etf_count}</div>
+                    <div className="flex flex-wrap gap-1">
+                      {(stock.etfs || []).map(etf => (
+                        <span
+                          key={`${stock.stock_code}-${etf.code}`}
+                          title={etf.name}
+                          className="rounded border border-[#1F2A36] bg-[#0E1720] px-1.5 py-0.5 text-[9px] text-gray-300"
                         >
-                          <span className="font-mono font-semibold text-cyan-300">{etf.code}</span>
-                          <span className="text-gray-600"> {fmt(etf.weight, 2)}%</span>
-                        </div>
+                          <span className="font-mono text-cyan-300">{etf.code}</span>
+                          <span className="ml-1 font-mono text-gray-500">{fmt(etf.weight, 2)}%</span>
+                        </span>
                       ))}
                     </div>
                   </div>
                 ))}
               </div>
-              {!expandedStocks && sector.stocks.length > 50 && (
-                <div className="px-4 py-3 text-center border-t border-[#1A1A1A] bg-[#0A0D0F]">
-                  <button
-                    onClick={() => setExpandedStocks(true)}
-                    className="text-[10px] px-3 py-1.5 rounded border border-[#2A4A5A] text-blue-400 hover:bg-[#1a3a4a] transition-colors"
-                  >
-                    查看全部 {sector.stocks.length} 檔成分股
-                  </button>
-                </div>
-              )}
             </div>
 
-            <div className="flex-shrink-0 px-4 py-2 text-[9px] text-gray-700 border-t border-[#1A1A1A] bg-[#080A0D]">
-              💡 共計 {sector.stocks.length} 檔成分股 · 累計權重 {fmt(sector.totalWeight, 2)} · 被 {sector.etfCount} 檔ETF持有
+            <div className="mt-2 text-[10px] text-gray-700">
+              {summary.method}
+              {summary.errors?.length ? `；${summary.errors.length} 檔ETF暫時無法載入，已排除於彙整。` : ''}
             </div>
           </div>
         </div>

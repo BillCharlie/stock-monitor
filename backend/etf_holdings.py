@@ -25,10 +25,12 @@ Email section:
 """
 from __future__ import annotations
 
+import base64
 import glob
 import io
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -113,6 +115,44 @@ _US_STOCKS: dict[str, tuple[str, str]] = {
     "TSLA": ("Tesla", "汽車"),
     "TSM": ("TSMC ADR", "半導體"),
 }
+
+SECTOR_COLORS: dict[str, str] = {
+    "半導體": "#40C4FF",
+    "科技系統廠": "#26A69A",
+    "電子零組件": "#80DEEA",
+    "其他電子": "#90A4AE",
+    "通信網路": "#64B5F6",
+    "鋼鐵": "#A1887F",
+    "電機機械": "#A5D6A7",
+    "電器電纜": "#FFCC80",
+    "太陽能/綠能": "#FFF176",
+    "AI與雲端": "#7E57C2",
+    "金融": "#CE93D8",
+    "光學": "#80CBC4",
+    "化工/塑化": "#FF7043",
+    "生技醫療": "#B39DDB",
+    "航運": "#4DD0E1",
+    "零售": "#F48FB1",
+    "汽車": "#FFCC80",
+    "水泥": "#BCAAA4",
+    "食品": "#E6EE9C",
+    "建設": "#CFD8DC",
+    "紡織": "#FFAB91",
+    "傳產": "#90A4AE",
+    "能源": "#B0BEC5",
+    "資訊服務": "#64FFDA",
+    "電子通路": "#81C784",
+    "文創": "#BA68C8",
+    "觀光餐旅": "#FFD54F",
+    "居家生活": "#B39DDB",
+    "其他": "#607D8B",
+}
+
+_FALLBACK_SECTOR_COLORS = [
+    "#40C4FF", "#26A69A", "#FF9800", "#CE93D8", "#FFF176", "#80DEEA",
+    "#A1887F", "#B39DDB", "#FF7043", "#90A4AE", "#66BB6A", "#F48FB1",
+    "#4DB6AC", "#9575CD", "#DCE775", "#7986CB",
+]
 
 # ── Master list ───────────────────────────────────────────────────────────────
 ACTIVE_ETFS: dict[str, str] = {
@@ -606,6 +646,361 @@ def _refresh_result_enrichment(result: dict) -> dict:
         result["name"] = ACTIVE_ETFS[code]
         result["type"] = "bond" if code.endswith("D") else "stock"
     return result
+
+
+# ── Cross-ETF sector summary for frontend ────────────────────────────────────
+
+def _sector_color(name: str, index: int = 0) -> str:
+    return SECTOR_COLORS.get(name) or _FALLBACK_SECTOR_COLORS[index % len(_FALLBACK_SECTOR_COLORS)]
+
+
+def _as_float(value, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        n = float(value)
+        if math.isnan(n) or math.isinf(n):
+            return default
+        return n
+    except Exception:
+        return default
+
+
+def _date_only(value: str | None) -> str:
+    if not value:
+        return ""
+    text = str(value).strip()
+    m = re.search(r"\d{4}-\d{2}-\d{2}", text)
+    if m:
+        return m.group(0)
+    return text[:10]
+
+
+def _parse_date_key(value: str | None) -> datetime | None:
+    text = _date_only(value)
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _render_sector_pie_chart(sectors: list[dict]) -> dict:
+    """Render the pie as a PNG data URL. Labels are placed by the frontend from metadata."""
+    width, height = 720, 520
+    cx, cy, radius = 260, 260, 210
+    bbox = [cx - radius, cy - radius, cx + radius, cy + radius]
+    total = sum(_as_float(s.get("total_weight")) for s in sectors)
+    if total <= 0:
+        return {
+            "image": "",
+            "width": width,
+            "height": height,
+            "center_x": cx,
+            "center_y": cy,
+            "radius": radius,
+            "slices": [],
+        }
+
+    from PIL import Image, ImageDraw
+
+    image = Image.new("RGBA", (width, height), (10, 10, 10, 0))
+    draw = ImageDraw.Draw(image)
+    start = -90.0
+    slices = []
+
+    for index, sector in enumerate(sectors):
+        weight = _as_float(sector.get("total_weight"))
+        if weight <= 0:
+            continue
+        span = weight / total * 360.0
+        end = start + span
+        color = sector.get("color") or _sector_color(sector.get("name", "其他"), index)
+        draw.pieslice(bbox, start=start, end=end, fill=color, outline="#0A0A0A", width=2)
+
+        mid = start + span / 2.0
+        rad = math.radians(mid)
+        # Keep labels slightly outside tiny slices so they remain selectable/readable.
+        label_radius = radius * (0.66 if span >= 18 else 0.88)
+        slices.append({
+            "name": sector.get("name", "其他"),
+            "color": color,
+            "pct": round(weight / total * 100.0, 2),
+            "total_weight": round(weight, 4),
+            "start_deg": round((start + 90.0) % 360.0, 4),
+            "end_deg": round((end + 90.0) % 360.0, 4),
+            "mid_deg": round((mid + 90.0) % 360.0, 4),
+            "label_x": round((cx + label_radius * math.cos(rad)) / width, 4),
+            "label_y": round((cy + label_radius * math.sin(rad)) / height, 4),
+        })
+        start = end
+
+    draw.ellipse(
+        [cx - 72, cy - 72, cx + 72, cy + 72],
+        fill="#080A0D",
+        outline="#24313D",
+        width=2,
+    )
+    out = io.BytesIO()
+    image.save(out, format="PNG", optimize=True)
+    encoded = base64.b64encode(out.getvalue()).decode("ascii")
+    return {
+        "image": f"data:image/png;base64,{encoded}",
+        "width": width,
+        "height": height,
+        "center_x": cx,
+        "center_y": cy,
+        "radius": radius,
+        "slices": slices,
+    }
+
+
+def _build_active_etf_sector_payload(
+    all_holdings: dict[str, dict],
+    *,
+    top_n: int = 20,
+    include_chart: bool = True,
+) -> dict:
+    sectors: dict[str, dict] = {}
+    etf_summaries = []
+    latest_date = ""
+    total_positions = 0
+    stock_etf_count = 0
+    errors = []
+
+    for etf_code, raw_info in sorted((all_holdings or {}).items()):
+        info = raw_info or {}
+        if etf_code.endswith("D"):
+            continue
+        if info.get("error") or not info.get("holdings"):
+            if info.get("error"):
+                errors.append({"code": etf_code, "error": info.get("error")})
+            continue
+
+        info = _refresh_result_enrichment(info)
+        holdings = info.get("holdings") or []
+        stock_etf_count += 1
+        total_positions += len(holdings)
+        date_key = _date_only(info.get("date"))
+        if date_key and (not latest_date or date_key > latest_date):
+            latest_date = date_key
+
+        etf_sector_weights: dict[str, float] = defaultdict(float)
+        for holding in holdings:
+            weight = _as_float(holding.get("weight_pct"))
+            if weight <= 0:
+                continue
+            sector_name = holding.get("sector") or "其他"
+            if sector_name not in sectors:
+                sectors[sector_name] = {
+                    "name": sector_name,
+                    "total_weight": 0.0,
+                    "positions": 0,
+                    "etf_codes": set(),
+                    "stocks": {},
+                }
+            sector = sectors[sector_name]
+            sector["total_weight"] += weight
+            sector["positions"] += 1
+            sector["etf_codes"].add(etf_code)
+            etf_sector_weights[sector_name] += weight
+
+            stock_code = _normalise_code(holding.get("stock_code", "")) or holding.get("stock_name") or "UNKNOWN"
+            stock_name = holding.get("stock_name") or stock_code
+            stocks = sector["stocks"]
+            if stock_code not in stocks:
+                stocks[stock_code] = {
+                    "stock_code": stock_code,
+                    "stock_name": stock_name,
+                    "total_weight": 0.0,
+                    "etfs": [],
+                }
+            stock = stocks[stock_code]
+            stock["total_weight"] += weight
+            stock["etfs"].append({
+                "code": etf_code,
+                "name": info.get("name") or ACTIVE_ETFS.get(etf_code, etf_code),
+                "weight": round(weight, 4),
+            })
+
+        top_sectors = [
+            {"name": name, "weight": round(weight, 4)}
+            for name, weight in sorted(etf_sector_weights.items(), key=lambda x: -x[1])[:3]
+        ]
+        etf_summaries.append({
+            "code": etf_code,
+            "name": info.get("name") or ACTIVE_ETFS.get(etf_code, etf_code),
+            "date": date_key,
+            "holdings": len(holdings),
+            "top10_weight": info.get("top10_weight"),
+            "top_sectors": top_sectors,
+            "top_holdings": holdings[:5],
+        })
+
+    total_weight = sum(_as_float(s.get("total_weight")) for s in sectors.values())
+    sector_list = []
+    for index, sector in enumerate(sorted(sectors.values(), key=lambda x: -x["total_weight"])):
+        sector_total = _as_float(sector.get("total_weight"))
+        sector_pct = sector_total / total_weight * 100.0 if total_weight else 0.0
+        stocks = []
+        for stock in sorted(sector["stocks"].values(), key=lambda x: -x["total_weight"])[:top_n]:
+            stock_total = _as_float(stock.get("total_weight"))
+            etfs = sorted(stock["etfs"], key=lambda x: -_as_float(x.get("weight")))
+            stocks.append({
+                "stock_code": stock.get("stock_code"),
+                "stock_name": stock.get("stock_name"),
+                "total_weight": round(stock_total, 4),
+                "sector_pct": round(stock_total / sector_total * 100.0, 2) if sector_total else 0.0,
+                "total_pct": round(stock_total / total_weight * 100.0, 2) if total_weight else 0.0,
+                "etf_count": len(etfs),
+                "etfs": etfs,
+            })
+        sector_list.append({
+            "name": sector["name"],
+            "color": _sector_color(sector["name"], index),
+            "total_weight": round(sector_total, 4),
+            "pct": round(sector_pct, 2),
+            "positions": sector["positions"],
+            "etf_count": len(sector["etf_codes"]),
+            "stock_count": len(sector["stocks"]),
+            "stocks": stocks,
+            "changes": {},
+        })
+
+    payload = {
+        "date": latest_date or datetime.now().strftime("%Y-%m-%d"),
+        "generated_at": datetime.now().isoformat(),
+        "method": "各股票型主動式ETF持股權重直接加總，再按全部持股權重換算產業占比；未依ETF規模加權。",
+        "stock_etf_count": stock_etf_count,
+        "sector_count": len(sector_list),
+        "total_positions": total_positions,
+        "total_weight": round(total_weight, 4),
+        "sectors": sector_list,
+        "etf_summaries": sorted(etf_summaries, key=lambda x: x["code"]),
+        "errors": errors,
+    }
+    payload["chart"] = _render_sector_pie_chart(sector_list) if include_chart else {}
+    return payload
+
+
+def _sector_summary_snapshot(payload: dict) -> dict:
+    return {
+        "date": payload.get("date"),
+        "generated_at": payload.get("generated_at"),
+        "total_weight": payload.get("total_weight", 0),
+        "sectors": {
+            s.get("name"): {
+                "total_weight": s.get("total_weight", 0),
+                "pct": s.get("pct", 0),
+                "etf_count": s.get("etf_count", 0),
+                "stock_count": s.get("stock_count", 0),
+            }
+            for s in payload.get("sectors", [])
+            if s.get("name")
+        },
+    }
+
+
+def _sector_snapshot_path(date_key: str) -> str:
+    return os.path.join(CACHE_DIR, f"etf_sector_summary_{date_key}.json")
+
+
+def _find_sector_snapshot(current_date: str, days_back: int) -> dict | None:
+    current_dt = _parse_date_key(current_date) or datetime.now()
+    target = current_dt - timedelta(days=days_back)
+    candidates = []
+    for path in glob.glob(os.path.join(CACHE_DIR, "etf_sector_summary_*.json")):
+        name = os.path.basename(path)
+        m = re.search(r"etf_sector_summary_(\d{4}-\d{2}-\d{2})\.json$", name)
+        if not m:
+            continue
+        snap_dt = _parse_date_key(m.group(1))
+        if snap_dt and snap_dt <= target:
+            candidates.append((snap_dt, path))
+    if not candidates:
+        return None
+    _, path = max(candidates, key=lambda item: item[0])
+    snap = _load_json(path)
+    return snap if snap.get("sectors") else None
+
+
+def _prev_day_sector_snapshot(all_holdings: dict[str, dict]) -> dict | None:
+    prev_all: dict[str, dict] = {}
+    for etf_code in all_holdings:
+        if etf_code.endswith("D"):
+            continue
+        prev = _load_json(_prev_path(etf_code))
+        if prev.get("holdings"):
+            prev_all[etf_code] = prev
+    if not prev_all:
+        return None
+    payload = _build_active_etf_sector_payload(prev_all, top_n=0, include_chart=False)
+    return _sector_summary_snapshot(payload)
+
+
+def _calc_sector_change(sector: dict, baseline: dict | None) -> dict:
+    if not baseline or not baseline.get("sectors"):
+        return {
+            "available": False,
+            "baseline_date": None,
+            "previous_pct": None,
+            "delta_pct_points": None,
+            "previous_weight": None,
+            "delta_weight": None,
+        }
+    base_sector = baseline.get("sectors", {}).get(sector.get("name")) or {}
+    previous_pct = _as_float(base_sector.get("pct"))
+    previous_weight = _as_float(base_sector.get("total_weight"))
+    return {
+        "available": True,
+        "baseline_date": baseline.get("date"),
+        "previous_pct": round(previous_pct, 2),
+        "delta_pct_points": round(_as_float(sector.get("pct")) - previous_pct, 2),
+        "previous_weight": round(previous_weight, 4),
+        "delta_weight": round(_as_float(sector.get("total_weight")) - previous_weight, 4),
+    }
+
+
+def fetch_etf_sector_summary(force_refresh: bool = False, holdings_refresh: bool = False) -> dict:
+    """
+    Return a backend-prepared active ETF sector summary for the frontend:
+    PNG pie chart, clickable slice geometry, sector changes, and top-20 companies.
+    """
+    summary_cache = os.path.join(CACHE_DIR, "etf_sector_summary_latest.json")
+    if not force_refresh and os.path.exists(summary_cache):
+        age = time.time() - os.path.getmtime(summary_cache)
+        if age < 10 * 60:
+            cached = _load_json(summary_cache)
+            if cached.get("sectors") and cached.get("chart"):
+                return cached
+
+    all_holdings = fetch_all_etf_holdings(force_refresh=holdings_refresh)
+    payload = _build_active_etf_sector_payload(all_holdings, top_n=20, include_chart=True)
+
+    baselines = {
+        "day": _find_sector_snapshot(payload.get("date"), 1) or _prev_day_sector_snapshot(all_holdings),
+        "week": _find_sector_snapshot(payload.get("date"), 7),
+        "month": _find_sector_snapshot(payload.get("date"), 30),
+    }
+    payload["change_sources"] = {
+        key: {
+            "available": bool(value and value.get("sectors")),
+            "date": value.get("date") if value else None,
+        }
+        for key, value in baselines.items()
+    }
+    for sector in payload.get("sectors", []):
+        sector["changes"] = {
+            key: _calc_sector_change(sector, baseline)
+            for key, baseline in baselines.items()
+        }
+
+    snapshot = _sector_summary_snapshot(payload)
+    date_key = _date_only(payload.get("date")) or datetime.now().strftime("%Y-%m-%d")
+    _save_json(_sector_snapshot_path(date_key), snapshot)
+    _save_json(summary_cache, payload)
+    return payload
 
 
 # ── MoneyDJ scraper (primary) ─────────────────────────────────────────────────

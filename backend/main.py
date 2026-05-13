@@ -38,6 +38,7 @@ from watchlist import MARKET_INDICES, WATCHLIST
 from etf_holdings import (
     fetch_etf_holdings,
     fetch_all_etf_holdings,
+    fetch_etf_sector_summary,
     build_etf_email_section,
     ACTIVE_ETFS,
 )
@@ -481,6 +482,12 @@ def get_all_etf_holdings(refresh: bool = False):
     if refresh or not _etf_holdings:
         _etf_holdings = fetch_all_etf_holdings(force_refresh=refresh)
     return _etf_holdings
+
+
+@app.get("/api/etf-holdings/sector-summary")
+def get_etf_sector_summary(refresh: bool = False, holdings_refresh: bool = False):
+    """Return sector-level active ETF summary with a backend-rendered PNG pie chart."""
+    return fetch_etf_sector_summary(force_refresh=refresh, holdings_refresh=holdings_refresh)
 
 
 @app.get("/api/etf-holdings/{symbol}")
