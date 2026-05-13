@@ -125,81 +125,314 @@ function TrumpNewsReportSummary({ data }) {
   )
 }
 
-// ── TW: 三大法人 panel ────────────────────────────────────────────────────────
-function InvestorsTW({ data }) {
-  const trend = data.trend || []
-  const foreignVals = trend.map(d => d.foreign_net)
-  const maxAbs = Math.max(...foreignVals.map(Math.abs), 1)
+// ── helpers ───────────────────────────────────────────────────────────────────
+const fmtNet = v => {
+  if (v == null) return '—'
+  const abs = Math.abs(v)
+  const sign = v >= 0 ? '+' : '-'
+  if (abs >= 10000) return `${sign}${(abs / 10000).toFixed(1)}萬`
+  return `${sign}${abs.toLocaleString()}`
+}
+const fmtK = v => {
+  if (v == null) return '—'
+  if (v >= 10000) return `${(v / 10000).toFixed(1)}萬`
+  return v.toLocaleString()
+}
 
-  const fmt = v => {
-    if (v == null) return '—'
-    const abs = Math.abs(v)
-    const sign = v >= 0 ? '+' : '-'
-    if (abs >= 10000) return `${sign}${(abs / 10000).toFixed(1)}萬`
-    return `${sign}${abs.toLocaleString()}`
-  }
+// ── TW: 三大法人 ──────────────────────────────────────────────────────────────
+function ThreeForcesPanel({ data }) {
+  const trend   = data.trend || []
+  const maxAbs  = Math.max(...trend.map(d => Math.abs(d.foreign_net)), 1)
 
   return (
-    <div className="space-y-3 pt-1">
+    <div className="space-y-3">
       {/* 三大法人最新數字 */}
       <div className="grid grid-cols-3 gap-2">
         {[
-          { label: '外資買賣超', val: data.foreign_net, color: '#40C4FF' },
-          { label: '投信買賣超', val: data.trust_net,   color: '#AB47BC' },
-          { label: '自營商買賣超', val: data.dealer_net, color: '#FFA726' },
-        ].map(({ label, val, color }) => (
+          { label: '外資', val: data.foreign_net, color: '#40C4FF' },
+          { label: '投信', val: data.trust_net,   color: '#AB47BC' },
+          { label: '自營商', val: data.dealer_net, color: '#FFA726' },
+        ].map(({ label, val }) => (
           <div key={label} className="bg-[#111] rounded p-2 text-center border border-[#1E1E1E]">
-            <div className="text-[9px] text-gray-600 mb-1">{label}</div>
+            <div className="text-[9px] text-gray-500 mb-1">{label}買賣超</div>
             <div className={`text-sm font-mono font-bold ${val >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>
-              {fmt(val)}
+              {fmtNet(val)}
             </div>
-            <div className="text-[9px] text-gray-700">張</div>
+            <div className="text-[9px] text-gray-600">張</div>
           </div>
         ))}
       </div>
 
-      {/* 外資買賣超趨勢小圖 */}
+      {/* 外資趨勢柱圖 */}
       {trend.length > 1 && (
         <div>
-          <div className="text-[9px] text-gray-600 mb-1">外資近{trend.length}日買賣超 (張)</div>
+          <div className="text-[9px] text-gray-500 mb-1">外資近{trend.length}日買賣超趨勢</div>
           <div className="flex items-stretch gap-0.5 h-16 bg-[#0A0A0A] rounded p-1">
             {trend.map((d, i) => {
               const pct = Math.abs(d.foreign_net) / maxAbs
               const isPos = d.foreign_net >= 0
               return (
-                <div key={i} className="flex-1 flex flex-col items-center justify-center gap-0"
-                  title={`${d.date}: ${d.foreign_net?.toLocaleString()}張`}>
-                  <div className="w-full flex-1 flex items-end justify-center">
-                    {isPos && (
-                      <div className="w-full rounded-sm"
-                        style={{ height: `${pct * 100}%`, minHeight: 2, background: '#EF5350' }} />
-                    )}
+                <div key={i} className="flex-1 flex flex-col items-center"
+                  title={`${d.date}: ${fmtNet(d.foreign_net)}張`}>
+                  <div className="w-full flex-1 flex items-end">
+                    {isPos && <div className="w-full rounded-sm" style={{ height: `${pct*100}%`, minHeight: 2, background: '#EF5350' }} />}
                   </div>
-                  <div className="w-full flex-1 flex items-start justify-center">
-                    {!isPos && (
-                      <div className="w-full rounded-sm"
-                        style={{ height: `${pct * 100}%`, minHeight: 2, background: '#26A69A' }} />
-                    )}
+                  <div className="w-full flex-1 flex items-start">
+                    {!isPos && <div className="w-full rounded-sm" style={{ height: `${pct*100}%`, minHeight: 2, background: '#26A69A' }} />}
                   </div>
                 </div>
               )
             })}
           </div>
-          <div className="flex justify-between text-[8px] text-gray-700 mt-0.5">
+          <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
             <span>{trend[0]?.date?.slice(5)}</span>
-            <span>{trend[trend.length - 1]?.date?.slice(5)}</span>
+            <span>{trend[trend.length-1]?.date?.slice(5)}</span>
           </div>
         </div>
       )}
 
-      {/* 三大法人合計 */}
-      <div className="flex items-center justify-between text-[10px] bg-[#111] rounded px-3 py-1.5 border border-[#1E1E1E]">
-        <span className="text-gray-500">三大法人合計買賣超</span>
-        <span className={`font-mono font-bold ${data.total_net >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>
-          {fmt(data.total_net)} 張
+      {/* 三大合計 + 日期 */}
+      <div className="flex items-center justify-between bg-[#0D1A0D] rounded px-3 py-2 border border-[#1A2A1A]">
+        <span className="text-xs text-gray-400">三大法人合計</span>
+        <span className={`text-base font-mono font-bold ${data.total_net >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>
+          {fmtNet(data.total_net)} 張
         </span>
-        <span className="text-gray-700 text-[9px]">{data.latest_date}</span>
+        <span className="text-[10px] text-gray-600">{data.latest_date} {data.market}</span>
       </div>
+
+      {/* 5日明細表 */}
+      {trend.length > 0 && (
+        <div>
+          <div className="text-[9px] text-gray-500 mb-1">近5日明細</div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[10px]">
+              <thead>
+                <tr className="text-gray-600 border-b border-[#1E1E1E]">
+                  <td className="py-1 pr-2">日期</td>
+                  <td className="py-1 pr-2 text-right text-[#40C4FF]">外資</td>
+                  <td className="py-1 pr-2 text-right text-[#AB47BC]">投信</td>
+                  <td className="py-1 pr-2 text-right text-[#FFA726]">自營</td>
+                  <td className="py-1 text-right">合計</td>
+                </tr>
+              </thead>
+              <tbody>
+                {[...trend].reverse().map((d, i) => (
+                  <tr key={i} className="border-b border-[#111] hover:bg-[#111]">
+                    <td className="py-1 pr-2 text-gray-500">{d.date?.slice(5)}</td>
+                    <td className={`py-1 pr-2 text-right font-mono ${d.foreign_net >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>{fmtNet(d.foreign_net)}</td>
+                    <td className={`py-1 pr-2 text-right font-mono ${d.trust_net   >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>{fmtNet(d.trust_net)}</td>
+                    <td className={`py-1 pr-2 text-right font-mono ${d.dealer_net  >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>{fmtNet(d.dealer_net)}</td>
+                    <td className={`py-1 text-right font-mono font-bold ${d.total_net >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>{fmtNet(d.total_net)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── TW: 融資融券 ──────────────────────────────────────────────────────────────
+function MarginPanel({ margin }) {
+  if (!margin || margin.error) {
+    return <div className="text-[10px] text-gray-600 py-2 text-center">{margin?.error || '無融資融券資料'}</div>
+  }
+
+  const trend = margin.trend || []
+  const maxBal = Math.max(...trend.map(t => t.margin_bal), 1)
+
+  const ratio = margin.margin_short_ratio
+  const ratioLabel = ratio == null ? '—' : ratio > 15 ? '多方明顯主導' : ratio > 8 ? '多方略優' : ratio > 3 ? '均衡' : '空方壓力'
+  const ratioColor = ratio == null ? 'text-gray-500' : ratio > 8 ? 'text-[#EF5350]' : ratio > 3 ? 'text-[#FFA726]' : 'text-[#26A69A]'
+
+  return (
+    <div className="space-y-3">
+      {/* 融資 / 融券 餘額卡片 */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="bg-[#111] rounded p-2 border border-[#1E1E1E]">
+          <div className="text-[9px] text-gray-500 mb-1">融資餘額</div>
+          <div className="text-sm font-mono text-[#40C4FF] font-bold">{fmtK(margin.margin_bal)}</div>
+          <div className="flex justify-between mt-1.5 text-[9px] text-gray-600">
+            <span>↑買進 {fmtK(margin.margin_buy)}</span>
+            <span>↓賣出 {fmtK(margin.margin_sell)}</span>
+          </div>
+        </div>
+        <div className="bg-[#111] rounded p-2 border border-[#1E1E1E]">
+          <div className="text-[9px] text-gray-500 mb-1">融券餘額（空單）</div>
+          <div className="text-sm font-mono text-[#EF5350] font-bold">{fmtK(margin.short_bal)}</div>
+          <div className="flex justify-between mt-1.5 text-[9px] text-gray-600">
+            <span>↓賣出 {fmtK(margin.short_sell)}</span>
+            <span>↑回補 {fmtK(margin.short_buy)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 資券比 */}
+      <div className="flex items-center justify-between bg-[#111] rounded px-3 py-2 border border-[#1E1E1E]">
+        <span className="text-xs text-gray-400">資券比</span>
+        <span className={`text-base font-mono font-bold ${ratioColor}`}>
+          {ratio != null ? ratio.toFixed(1) + 'x' : '—'}
+        </span>
+        <span className={`text-[10px] ${ratioColor}`}>{ratioLabel}</span>
+      </div>
+
+      {/* 融資餘額趨勢 */}
+      {trend.length > 1 && (
+        <div>
+          <div className="text-[9px] text-gray-500 mb-1">融資餘額近{trend.length}日趨勢</div>
+          <div className="flex items-end gap-0.5 h-10 bg-[#0A0A0A] rounded p-1">
+            {trend.map((d, i) => (
+              <div key={i} className="flex-1 flex items-end"
+                title={`${d.date}: 融資${fmtK(d.margin_bal)} 融券${fmtK(d.short_bal)}`}>
+                <div className="w-full rounded-sm"
+                  style={{ height: `${Math.max(d.margin_bal/maxBal*100, 5)}%`, background: '#40C4FF88' }} />
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
+            <span>{trend[0]?.date?.slice(5)}</span>
+            <span>{trend[trend.length-1]?.date?.slice(5)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* 5日明細表 */}
+      {trend.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[10px]">
+            <thead>
+              <tr className="text-gray-600 border-b border-[#1E1E1E]">
+                <td className="py-1 pr-2">日期</td>
+                <td className="py-1 pr-2 text-right text-[#40C4FF]">融資餘額</td>
+                <td className="py-1 pr-2 text-right text-[#EF5350]">融券餘額</td>
+                <td className="py-1 text-right text-[#FFA726]">資券比</td>
+              </tr>
+            </thead>
+            <tbody>
+              {[...trend].reverse().map((d, i) => (
+                <tr key={i} className="border-b border-[#111] hover:bg-[#111]">
+                  <td className="py-1 pr-2 text-gray-500">{d.date?.slice(5)}</td>
+                  <td className="py-1 pr-2 text-right font-mono text-[#40C4FF]">{fmtK(d.margin_bal)}</td>
+                  <td className="py-1 pr-2 text-right font-mono text-[#EF5350]">{fmtK(d.short_bal)}</td>
+                  <td className="py-1 text-right font-mono text-[#FFA726]">
+                    {d.margin_short_ratio != null ? d.margin_short_ratio.toFixed(1)+'x' : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="text-[9px] text-gray-700">{margin.latest_date} · {margin.market}</div>
+    </div>
+  )
+}
+
+// ── TW: 主力動向（三大法人行為分析）─────────────────────────────────────────
+function MajorForcePanel({ data }) {
+  const total = data.total_net ?? 0
+  const foreign = data.foreign_net ?? 0
+  const trust   = data.trust_net   ?? 0
+  const dealer  = data.dealer_net  ?? 0
+  const trend   = data.trend || []
+
+  // 主力判斷邏輯
+  const sentiment = total > 0 ? '主力買超，籌碼偏多' : total < 0 ? '主力賣超，籌碼偏空' : '主力中立'
+  const sentColor = total > 0 ? 'text-[#EF5350]' : total < 0 ? 'text-[#26A69A]' : 'text-[#FFA726]'
+
+  // 連續買超/賣超天數
+  let streak = 0
+  const dir = total >= 0 ? 1 : -1
+  for (const d of [...trend].reverse()) {
+    if ((d.total_net >= 0 ? 1 : -1) === dir) streak++
+    else break
+  }
+
+  // 外資主導性
+  const foreignDominance = Math.abs(foreign) > Math.abs(trust) + Math.abs(dealer)
+
+  return (
+    <div className="space-y-3">
+      {/* 主力訊號卡 */}
+      <div className="bg-[#0D1020] border border-[#1E2A3A] rounded p-3">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs text-gray-400 font-semibold">主力動向判讀</span>
+          <span className="text-[9px] text-gray-600">{data.latest_date}</span>
+        </div>
+        <div className={`text-sm font-bold ${sentColor} mb-2`}>{sentiment}</div>
+        <div className="grid grid-cols-2 gap-2 text-[10px]">
+          <div className="flex items-center gap-1">
+            <span className="text-gray-500">連續{dir > 0 ? '買超' : '賣超'}</span>
+            <span className={`font-mono font-bold ${sentColor}`}>{streak} 日</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-gray-500">主導方</span>
+            <span className="font-bold text-[#40C4FF]">{foreignDominance ? '外資主導' : '投信/自營主導'}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 各方力道比較 */}
+      <div>
+        <div className="text-[9px] text-gray-500 mb-1.5">各方力道（張）</div>
+        {[
+          { label: '外資', val: foreign, color: '#40C4FF' },
+          { label: '投信', val: trust,   color: '#AB47BC' },
+          { label: '自營商', val: dealer, color: '#FFA726' },
+        ].map(({ label, val, color }) => {
+          const maxVal = Math.max(Math.abs(foreign), Math.abs(trust), Math.abs(dealer), 1)
+          const barPct = Math.abs(val) / maxVal * 100
+          return (
+            <div key={label} className="flex items-center gap-2 mb-1.5">
+              <span className="text-[9px] text-gray-500 w-12 flex-shrink-0">{label}</span>
+              <div className="flex-1 h-3 bg-[#0A0A0A] rounded overflow-hidden flex">
+                {val >= 0
+                  ? <><div className="flex-1" /><div className="rounded-r" style={{ width: `${barPct/2}%`, background: '#EF5350' }} /></>
+                  : <><div className="rounded-l" style={{ width: `${barPct/2}%`, background: '#26A69A' }} /><div className="flex-1" /></>
+                }
+              </div>
+              <span className={`text-[10px] font-mono w-16 text-right ${val >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>
+                {fmtNet(val)}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── TW: 完整法人面板（含三個子分頁）────────────────────────────────────────────
+function InvestorsTW({ data }) {
+  const [tab, setTab] = useState('major')
+  const tabs = [
+    { key: 'major',  label: '主力動向' },
+    { key: 'three',  label: '三大法人' },
+    { key: 'margin', label: '融資融券' },
+  ]
+
+  return (
+    <div className="space-y-2 pt-1">
+      {/* Tab bar */}
+      <div className="flex gap-1 border-b border-[#1E1E1E] pb-1">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`px-3 py-1 text-xs rounded-t transition-colors ${
+              tab === t.key
+                ? 'bg-[#1A1A2E] text-white border border-[#2A2A4A] border-b-transparent'
+                : 'text-gray-500 hover:text-gray-300'
+            }`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'major'  && <MajorForcePanel  data={data} />}
+      {tab === 'three'  && <ThreeForcesPanel data={data} />}
+      {tab === 'margin' && <MarginPanel      margin={data.margin} />}
     </div>
   )
 }
@@ -276,9 +509,10 @@ function InvestorsUS({ data }) {
 
 // ── Collapsible investors section ─────────────────────────────────────────────
 function InvestorsSection({ symbol }) {
+  const isTW = symbol?.toUpperCase().endsWith('.TW') || symbol?.toUpperCase().endsWith('.TWO')
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(false)
-  const [open, setOpen]       = useState(false)
+  const [open, setOpen]       = useState(isTW)   // auto-open for TW stocks
 
   const load = () => {
     if (data || loading) return
@@ -288,6 +522,12 @@ function InvestorsSection({ symbol }) {
       .catch(() => setData({ error: '資料載入失敗' }))
       .finally(() => setLoading(false))
   }
+
+  // Auto-load for TW stocks on mount
+  useEffect(() => {
+    if (isTW) load()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol])
 
   const toggle = () => {
     setOpen(o => !o)
@@ -301,9 +541,7 @@ function InvestorsSection({ symbol }) {
         className="w-full flex items-center justify-between px-3 py-2 text-xs hover:bg-[#1A1A1A] transition-colors"
       >
         <span className="font-semibold text-gray-300">
-          {symbol?.endsWith('.TW') || symbol?.endsWith('.TWO')
-            ? '三大法人買賣超'
-            : '法人 / 散戶持股分析'}
+          {isTW ? '主力動向 / 三大法人 / 融資融券' : '法人 / 散戶持股分析'}
         </span>
         <span className="text-[10px] text-gray-600">{open ? '▼' : '▶'}</span>
       </button>
