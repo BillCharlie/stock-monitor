@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = os.path.join(os.getenv("DATA_DIR", os.path.dirname(__file__)), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-TRUMP_NEWS_CACHE_TTL = int(os.getenv("TRUMP_NEWS_CACHE_TTL", str(45 * 60)))
+TRUMP_NEWS_CACHE_TTL = int(os.getenv("TRUMP_NEWS_CACHE_TTL", str(5 * 3600)))
 TRUMP_CACHE_PATH = os.path.join(CACHE_DIR, "trump_news.json")
 
 HEADERS = {

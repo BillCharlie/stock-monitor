@@ -49,6 +49,18 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 HOLDINGS_CACHE_TTL = 4 * 3600    # 4 hours — skip re-fetch if cache is fresh
 ALL_CACHE_TTL      = 3 * 3600    # 3 hours — combined all-ETF snapshot
 STOCK_MASTER_CACHE_TTL = 24 * 3600
+ETF_SECTOR_BASELINE_START_DATE = os.getenv("ETF_SECTOR_BASELINE_START_DATE", "2025-05-14")
+
+SECTOR_CHANGE_PERIODS = {
+    "day": 1,
+    "week": 7,
+    "month": 30,
+    "quarter_1": 91,
+    "quarter_2": 182,
+    "quarter_3": 273,
+    "quarter_4": 365,
+    "year": 365,
+}
 
 TWSE_COMPANY_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
 TPEX_COMPANY_URL = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
@@ -891,6 +903,7 @@ def _sector_snapshot_path(date_key: str) -> str:
 def _find_sector_snapshot(current_date: str, days_back: int) -> dict | None:
     current_dt = _parse_date_key(current_date) or datetime.now()
     target = current_dt - timedelta(days=days_back)
+    start_dt = _parse_date_key(ETF_SECTOR_BASELINE_START_DATE)
     candidates = []
     for path in glob.glob(os.path.join(CACHE_DIR, "etf_sector_summary_*.json")):
         name = os.path.basename(path)
@@ -898,6 +911,8 @@ def _find_sector_snapshot(current_date: str, days_back: int) -> dict | None:
         if not m:
             continue
         snap_dt = _parse_date_key(m.group(1))
+        if start_dt and snap_dt and snap_dt < start_dt:
+            continue
         if snap_dt and snap_dt <= target:
             candidates.append((snap_dt, path))
     if not candidates:
@@ -921,6 +936,37 @@ def _prev_day_sector_snapshot(all_holdings: dict[str, dict]) -> dict | None:
     return _sector_summary_snapshot(payload)
 
 
+def _baseline_start_sector_snapshot(payload: dict) -> dict:
+    return {
+        "date": ETF_SECTOR_BASELINE_START_DATE,
+        "generated_at": payload.get("generated_at") or datetime.now().isoformat(),
+        "total_weight": 0,
+        "baseline_kind": "start_zero",
+        "sectors": {
+            s.get("name"): {
+                "total_weight": 0,
+                "pct": 0,
+                "etf_count": 0,
+                "stock_count": 0,
+            }
+            for s in payload.get("sectors", [])
+            if s.get("name")
+        },
+    }
+
+
+def _sector_baseline_for_period(
+    payload: dict,
+    all_holdings: dict[str, dict],
+    period_key: str,
+    days_back: int,
+) -> dict:
+    baseline = _find_sector_snapshot(payload.get("date"), days_back)
+    if not baseline and period_key == "day":
+        baseline = _prev_day_sector_snapshot(all_holdings)
+    return baseline or _baseline_start_sector_snapshot(payload)
+
+
 def _calc_sector_change(sector: dict, baseline: dict | None) -> dict:
     if not baseline or not baseline.get("sectors"):
         return {
@@ -941,33 +987,42 @@ def _calc_sector_change(sector: dict, baseline: dict | None) -> dict:
         "delta_pct_points": round(_as_float(sector.get("pct")) - previous_pct, 2),
         "previous_weight": round(previous_weight, 4),
         "delta_weight": round(_as_float(sector.get("total_weight")) - previous_weight, 4),
+        "baseline_kind": baseline.get("baseline_kind", "snapshot"),
     }
 
 
 def fetch_etf_sector_summary(force_refresh: bool = False, holdings_refresh: bool = False) -> dict:
     """
     Return a backend-prepared active ETF sector summary for the frontend:
-    PNG pie chart, clickable slice geometry, sector changes, and top-20 companies.
+    clickable pie-chart geometry, sector changes, and top-20 companies.
     """
     summary_cache = os.path.join(CACHE_DIR, "etf_sector_summary_latest.json")
     if not force_refresh and os.path.exists(summary_cache):
         age = time.time() - os.path.getmtime(summary_cache)
         if age < 10 * 60:
             cached = _load_json(summary_cache)
+            cached_periods = set()
+            if cached.get("sectors"):
+                cached_periods = set((cached["sectors"][0].get("changes") or {}).keys())
             if (
                 cached.get("sectors")
                 and cached.get("chart")
                 and "image" not in cached.get("chart", {})
+                and all(key in cached_periods for key in SECTOR_CHANGE_PERIODS)
             ):
                 return cached
 
     all_holdings = fetch_all_etf_holdings(force_refresh=holdings_refresh)
     payload = _build_active_etf_sector_payload(all_holdings, top_n=20, include_chart=True)
 
+    start_snapshot = _baseline_start_sector_snapshot(payload)
+    start_path = _sector_snapshot_path(ETF_SECTOR_BASELINE_START_DATE)
+    if not os.path.exists(start_path):
+        _save_json(start_path, start_snapshot)
+
     baselines = {
-        "day": _find_sector_snapshot(payload.get("date"), 1) or _prev_day_sector_snapshot(all_holdings),
-        "week": _find_sector_snapshot(payload.get("date"), 7),
-        "month": _find_sector_snapshot(payload.get("date"), 30),
+        key: _sector_baseline_for_period(payload, all_holdings, key, days_back)
+        for key, days_back in SECTOR_CHANGE_PERIODS.items()
     }
     payload["change_sources"] = {
         key: {

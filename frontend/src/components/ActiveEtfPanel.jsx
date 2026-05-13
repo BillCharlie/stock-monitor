@@ -5,7 +5,14 @@ const CHANGE_LABELS = {
   day: '1日',
   week: '1週',
   month: '1月',
+  quarter_1: '1季(3月)',
+  quarter_2: '2季',
+  quarter_3: '3季',
+  quarter_4: '4季',
+  year: '年',
 }
+
+const ETF_BASELINE_START = '2025-05-14'
 
 function fmt(value, digits = 2) {
   const n = Number(value)
@@ -64,15 +71,17 @@ function findSliceFromPointer(event, chart) {
 }
 
 function ChangeCard({ label, change }) {
-  const available = change?.available
+  const available = change?.available !== false
+  const delta = available ? change?.delta_pct_points : 0
+  const baselineDate = change?.baseline_date || ETF_BASELINE_START
   return (
     <div className="min-w-[92px] flex-1 border border-[#1F2A36] bg-[#0A0F14] px-3 py-2">
       <div className="text-[10px] text-gray-600">{label}變化</div>
-      <div className={`mt-1 text-sm font-mono font-semibold ${changeTone(change?.delta_pct_points)}`}>
-        {available ? signed(change.delta_pct_points, 2, 'pp') : '尚無基準'}
+      <div className={`mt-1 text-sm font-mono font-semibold ${changeTone(delta)}`}>
+        {signed(delta, 2, 'pp')}
       </div>
       <div className="mt-0.5 text-[9px] text-gray-600">
-        {available ? `基準 ${fmtDate(change.baseline_date)}` : '累積快照後會自動顯示'}
+        基準 {fmtDate(baselineDate)}
       </div>
     </div>
   )
@@ -380,7 +389,7 @@ export default function ActiveEtfPanel() {
               </div>
 
               <div className="border-t border-[#1A1A1A] px-3 py-2 text-[10px] text-gray-600">
-                變化值使用已累積的產業快照比較；尚無1週或1月基準時會先顯示「尚無基準」，後續每日刷新後自動累積。
+                變化值優先使用已累積的產業快照；缺少對應日期時，以 2025-05-14 起始基準補足。
               </div>
             </div>
           </div>

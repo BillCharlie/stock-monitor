@@ -205,8 +205,8 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(_run_morning_email, "cron",
                       day_of_week="mon-fri", hour=report_hour, minute=report_minute,
                       id="morning_email")
-    # Daily news refresh at 07:30
-    scheduler.add_job(_refresh_news, "cron", hour=7, minute=30, id="news_refresh")
+    # TrumpNews / news refresh every 5 hours.
+    scheduler.add_job(_refresh_news, "interval", hours=5, id="news_refresh")
     # Active ETF holdings: Mon–Fri 15:00 (after TWSE close + disclosure window)
     scheduler.add_job(_run_etf_holdings_refresh, "cron",
                       day_of_week="mon-fri", hour=15, minute=0, id="etf_holdings")
@@ -709,6 +709,7 @@ def health():
         "status": "ok",
         "stocks_analyzed": len(_stock_analyses),
         "email_schedule": f"{report_hour:02d}:{report_minute:02d} Asia/Taipei (Mon-Fri)",
+        "news_refresh_schedule": "every 5 hours",
         "trump_news_last_updated": get_trump_last_updated(),
     }
 
