@@ -523,6 +523,7 @@ def analyze_trump_market_impact(sections: dict[str, list[dict[str, Any]]]) -> di
         text = f"{item.get('title', '')} {item.get('summary', '')}"
         matched = _matched_rules(text)
         item["market_tags"] = [m["label"] for m in matched]
+        item["market_tag_ids"] = [m["id"] for m in matched]
         for match in matched:
             current = rule_hits.setdefault(
                 match["id"],

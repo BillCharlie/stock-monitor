@@ -27,30 +27,104 @@ function isHistorical(value) {
   return Date.now() - d.getTime() > 21 * 24 * 60 * 60 * 1000
 }
 
-function ImpactSummary({ impact }) {
+function normalizeText(value) {
+  return String(value || '').toLowerCase()
+}
+
+function itemMatchesPolicyTheme(item, theme) {
+  if (!item || !theme) return false
+  const ids = [
+    ...(item.market_tag_ids || []),
+    ...(item.policy_theme_ids || []),
+  ].map(String)
+  if (theme.id && ids.includes(String(theme.id))) return true
+
+  const labels = [
+    ...(item.market_tags || []),
+    ...(item.policy_theme_labels || []),
+  ].map(String)
+  if (theme.label && labels.includes(String(theme.label))) return true
+
+  const haystack = normalizeText([
+    item.title,
+    item.summary,
+    item.source,
+    labels.join(' '),
+  ].filter(Boolean).join(' '))
+  return (theme.keywords || []).some(keyword => haystack.includes(normalizeText(keyword)))
+}
+
+function getSectionItems(sections) {
+  const seen = new Set()
+  const items = []
+  for (const tab of SECTION_TABS) {
+    for (const item of sections[tab.id] || []) {
+      const key = item.id || item.link || `${item.title || ''}|${item.published_at || item.pub_date || ''}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      items.push({
+        ...item,
+        _sectionId: tab.id,
+        _sectionLabel: tab.label,
+      })
+    }
+  }
+  return items
+}
+
+function ImpactSummary({ impact, selectedThemeId, onSelectTheme, filteredCount, onClearTheme }) {
   const themes = impact?.themes || []
   const sectors = impact?.sectors || []
+  const selectedTheme = themes.find(theme => String(theme.id) === String(selectedThemeId))
 
   return (
     <div className="flex-shrink-0 border-b border-[#1A1A1A] bg-[#101214] px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[11px] font-semibold text-[#40C4FF]">政策訊號</span>
         <span className="text-[10px] text-gray-300">{impact?.overall || '目前未偵測到明確市場板塊衝擊訊號'}</span>
+        {selectedTheme && (
+          <span className="text-[9px] text-[#40C4FF] border border-[#1E4E66] bg-[#071722] rounded px-1.5 py-0.5">
+            已篩選 {filteredCount} 則
+          </span>
+        )}
+        {selectedTheme && (
+          <button
+            type="button"
+            onClick={onClearTheme}
+            className="text-[9px] text-gray-500 hover:text-white border border-[#2A2A2A] rounded px-1.5 py-0.5"
+          >
+            清除
+          </button>
+        )}
       </div>
 
       {themes.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-1.5 mt-2">
-          {themes.slice(0, 6).map(theme => (
-            <div key={theme.id} className="border border-[#202833] bg-[#0C1117] rounded px-2 py-1.5 min-h-[52px]">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] text-white truncate">{theme.label}</span>
-                <span className="text-[9px] text-[#FFA726] flex-shrink-0">{theme.bias}</span>
-              </div>
-              <div className="text-[9px] text-gray-500 mt-1 leading-snug">
-                {(theme.sectors || []).slice(0, 4).join('、')}
-              </div>
-            </div>
-          ))}
+          {themes.slice(0, 6).map(theme => {
+            const selected = String(theme.id) === String(selectedThemeId)
+            return (
+              <button
+                key={theme.id}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => onSelectTheme?.(theme)}
+                className={`text-left border rounded px-2 py-1.5 min-h-[52px] transition-colors ${
+                  selected
+                    ? 'border-[#40C4FF] bg-[#0A2433] shadow-[0_0_0_1px_rgba(64,196,255,0.18)]'
+                    : 'border-[#202833] bg-[#0C1117] hover:border-[#31465B] hover:bg-[#101923]'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-white truncate">{theme.label}</span>
+                  <span className="text-[9px] text-[#FFA726] flex-shrink-0">{theme.bias}</span>
+                </div>
+                <div className="flex items-center gap-1 mt-1 text-[9px] leading-snug">
+                  <span className="text-gray-500 truncate">{(theme.sectors || []).slice(0, 4).join('、')}</span>
+                  <span className="text-gray-600 flex-shrink-0">{theme.hit_count || 0} 則</span>
+                </div>
+              </button>
+            )
+          })}
         </div>
       )}
 
@@ -67,7 +141,7 @@ function ImpactSummary({ impact }) {
   )
 }
 
-function SourceItem({ item }) {
+function SourceItem({ item, showSection = false }) {
   const text = item.summary || item.title
   const tags = item.market_tags || []
   const historical = isHistorical(item.published_at || item.pub_date)
@@ -77,11 +151,14 @@ function SourceItem({ item }) {
       href={item.link || '#'}
       target="_blank"
       rel="noreferrer noopener"
-      className="block px-3 py-2.5 border-b border-[#161616] hover:bg-[#141414] transition-colors"
+      className="group block px-3 py-2.5 border-b border-[#161616] hover:bg-[#141414] transition-colors"
     >
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
+            {showSection && item._sectionLabel && (
+              <span className="text-[8px] text-[#8BC34A] border border-[#263A25] rounded px-1">{item._sectionLabel}</span>
+            )}
             <span className="text-[9px] text-[#40C4FF]">{item.source}</span>
             {item.aggregator && (
               <span className="text-[8px] text-gray-600 border border-[#2A2A2A] rounded px-1">{item.aggregator}</span>
@@ -117,6 +194,7 @@ function SourceItem({ item }) {
 
 export default function TrumpNewsPanel({ onNeedKey }) {
   const [activeSection, setActiveSection] = useState('truth_posts')
+  const [selectedThemeId, setSelectedThemeId] = useState('')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -138,6 +216,14 @@ export default function TrumpNewsPanel({ onNeedKey }) {
 
   const sections = data?.sections || {}
   const activeItems = sections[activeSection] || []
+  const allItems = useMemo(() => getSectionItems(sections), [sections])
+  const themes = data?.impact?.themes || []
+  const selectedTheme = themes.find(theme => String(theme.id) === String(selectedThemeId))
+  const filteredItems = useMemo(() => {
+    if (!selectedTheme) return []
+    return allItems.filter(item => itemMatchesPolicyTheme(item, selectedTheme))
+  }, [allItems, selectedTheme])
+  const visibleItems = selectedTheme ? filteredItems : activeItems
   const counts = useMemo(() => {
     const out = {}
     for (const tab of SECTION_TABS) out[tab.id] = (sections[tab.id] || []).length
@@ -150,7 +236,10 @@ export default function TrumpNewsPanel({ onNeedKey }) {
         {SECTION_TABS.map(tab => (
           <button
             key={tab.id}
-            onClick={() => setActiveSection(tab.id)}
+            onClick={() => {
+              setActiveSection(tab.id)
+              setSelectedThemeId('')
+            }}
             className={`px-2.5 py-1 rounded text-[10px] whitespace-nowrap transition-colors flex-shrink-0 ${
               activeSection === tab.id
                 ? 'bg-[#0D47A1] text-white'
@@ -181,16 +270,34 @@ export default function TrumpNewsPanel({ onNeedKey }) {
         </div>
       </div>
 
-      <ImpactSummary impact={data?.impact} />
+      <ImpactSummary
+        impact={data?.impact}
+        selectedThemeId={selectedThemeId}
+        filteredCount={filteredItems.length}
+        onClearTheme={() => setSelectedThemeId('')}
+        onSelectTheme={(theme) => {
+          setSelectedThemeId(prev => (String(prev) === String(theme.id) ? '' : theme.id))
+        }}
+      />
 
       <div className="flex-1 overflow-y-auto">
-        {activeItems.length === 0 && !loading && (
-          <div className="flex items-center justify-center h-32 text-[11px] text-gray-600">
-            {error || '暫無 TrumpNews 資料'}
+        {selectedTheme && (
+          <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[#1A1A1A] bg-[#0B0F12] px-3 py-1.5">
+            <span className="text-[10px] text-[#40C4FF] truncate">訊號篩選：{selectedTheme.label}</span>
+            <span className="text-[9px] text-gray-500 flex-shrink-0">全部來源 {filteredItems.length} 則</span>
           </div>
         )}
-        {activeItems.map((item, i) => (
-          <SourceItem key={item.id || item.link || i} item={item} />
+        {visibleItems.length === 0 && !loading && (
+          <div className="flex items-center justify-center h-32 text-[11px] text-gray-600">
+            {error || (selectedTheme ? '沒有找到此政策訊號的相關內容' : '暫無 TrumpNews 資料')}
+          </div>
+        )}
+        {visibleItems.map((item, i) => (
+          <SourceItem
+            key={item.id || item.link || `${item._sectionId || activeSection}-${i}`}
+            item={item}
+            showSection={Boolean(selectedTheme)}
+          />
         ))}
       </div>
     </div>
