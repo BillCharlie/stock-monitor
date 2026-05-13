@@ -560,7 +560,7 @@ function EtfHoldingsPanel({ symbol }) {
         {!loading && data && !data.error && (
           <div className="space-y-2 pt-2">
             {/* Summary row */}
-            <div className="flex items-center gap-3 text-[10px] text-gray-500">
+            <div className="flex items-center gap-2 flex-wrap text-[10px] text-gray-500">
               <span>共 <strong className="text-gray-200">{data.total_holdings}</strong> 檔持股</span>
               {data.top10_weight && (
                 <span>前10大占比 <strong className="text-[#FFA726]">{data.top10_weight}%</strong></span>
@@ -568,39 +568,99 @@ function EtfHoldingsPanel({ symbol }) {
               <span className="ml-auto text-gray-700">更新: {data.date}</span>
             </div>
 
-            {/* Holdings table */}
-            {data.holdings?.length > 0 && (
-              <div className="overflow-x-auto max-h-72 overflow-y-auto">
-                <table className="w-full text-[10px]">
-                  <thead className="sticky top-0 bg-[#0D0D0D]">
-                    <tr className="text-gray-600 border-b border-[#1E1E1E]">
-                      <td className="py-1 pr-1 w-5">#</td>
-                      <td className="py-1 pr-2">代號</td>
-                      <td className="py-1 pr-2">名稱</td>
-                      <td className="py-1 pr-2 text-right">持股數</td>
-                      <td className="py-1 text-right text-[#FFA726]">占比%</td>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.holdings.map((h, i) => (
-                      <tr key={i} className="border-b border-[#111] hover:bg-[#111]">
-                        <td className="py-1 pr-1 text-gray-700">{i + 1}</td>
-                        <td className="py-1 pr-2 font-mono text-[#40C4FF]">{h.stock_code}</td>
-                        <td className="py-1 pr-2 text-gray-300 truncate max-w-[100px]">{h.stock_name}</td>
-                        <td className="py-1 pr-2 text-right font-mono text-gray-400">
-                          {h.shares != null ? h.shares.toLocaleString() : '—'}
-                        </td>
-                        <td className="py-1 text-right font-mono">
-                          {h.weight_pct != null
-                            ? <span className="text-[#FFA726]">{h.weight_pct}%</span>
-                            : <span className="text-gray-700">—</span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            {/* Change summary (vs previous trading day) */}
+            {data.changes && (
+              <div className="bg-[#0A0A14] border border-[#1E1E3A] rounded px-2 py-1.5 flex flex-wrap gap-2 text-[10px]">
+                <span className="text-gray-600 mr-1">較前日:</span>
+                {data.changes.new_positions?.length > 0 && (
+                  <span className="text-[#26A69A] font-semibold">
+                    ＋{data.changes.new_positions.length} 新建倉
+                    {' '}({data.changes.new_positions.slice(0,3).map(h => h.stock_code || h.stock_name).join('/')})
+                  </span>
+                )}
+                {data.changes.exited?.length > 0 && (
+                  <span className="text-[#EF5350] font-semibold">
+                    −{data.changes.exited.length} 出清
+                    {' '}({data.changes.exited.slice(0,3).map(h => h.stock_code || h.stock_name).join('/')})
+                  </span>
+                )}
+                {data.changes.increased?.length > 0 && (
+                  <span className="text-[#40C4FF]">
+                    ↑{data.changes.increased.length} 加碼
+                  </span>
+                )}
+                {data.changes.decreased?.length > 0 && (
+                  <span className="text-[#FFA726]">
+                    ↓{data.changes.decreased.length} 減碼
+                  </span>
+                )}
+                {!data.changes.new_positions?.length && !data.changes.exited?.length
+                  && !data.changes.increased?.length && !data.changes.decreased?.length && (
+                  <span className="text-gray-700">持股無變化</span>
+                )}
+                {data.changes.prev_date && (
+                  <span className="ml-auto text-gray-700">前次: {data.changes.prev_date}</span>
+                )}
               </div>
             )}
+
+            {/* Holdings table */}
+            {data.holdings?.length > 0 && (() => {
+              // Build a change lookup by stock_code for inline badges
+              const changeMap = {}
+              if (data.changes) {
+                for (const h of (data.changes.new_positions || []))
+                  changeMap[h.stock_code] = { type: 'new' }
+                for (const h of (data.changes.increased || []))
+                  changeMap[h.stock_code] = { type: 'up', delta: h.shares_delta }
+                for (const h of (data.changes.decreased || []))
+                  changeMap[h.stock_code] = { type: 'down', delta: h.shares_delta }
+              }
+              return (
+                <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                  <table className="w-full text-[10px]">
+                    <thead className="sticky top-0 bg-[#0D0D0D]">
+                      <tr className="text-gray-600 border-b border-[#1E1E1E]">
+                        <td className="py-1 pr-1 w-5">#</td>
+                        <td className="py-1 pr-2">代號</td>
+                        <td className="py-1 pr-2">名稱</td>
+                        <td className="py-1 pr-2 text-right">持股數</td>
+                        <td className="py-1 pr-2 text-right text-[#FFA726]">占比%</td>
+                        <td className="py-1 text-right">變化</td>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.holdings.map((h, i) => {
+                        const chg = changeMap[h.stock_code]
+                        const chgCell = chg
+                          ? chg.type === 'new'
+                            ? <span className="text-[#26A69A] font-bold">NEW</span>
+                            : chg.type === 'up'
+                              ? <span className="text-[#40C4FF]">↑{chg.delta?.toLocaleString()}</span>
+                              : <span className="text-[#FFA726]">↓{Math.abs(chg.delta)?.toLocaleString()}</span>
+                          : <span className="text-gray-800">─</span>
+                        return (
+                          <tr key={i} className={`border-b border-[#111] hover:bg-[#111] ${chg ? 'bg-[#0A0A12]' : ''}`}>
+                            <td className="py-1 pr-1 text-gray-700">{i + 1}</td>
+                            <td className="py-1 pr-2 font-mono text-[#40C4FF]">{h.stock_code || '—'}</td>
+                            <td className="py-1 pr-2 text-gray-300 truncate max-w-[90px]">{h.stock_name}</td>
+                            <td className="py-1 pr-2 text-right font-mono text-gray-400">
+                              {h.shares != null ? h.shares.toLocaleString() : '—'}
+                            </td>
+                            <td className="py-1 pr-2 text-right font-mono">
+                              {h.weight_pct != null
+                                ? <span className="text-[#FFA726]">{h.weight_pct}%</span>
+                                : <span className="text-gray-700">—</span>}
+                            </td>
+                            <td className="py-1 text-right font-mono">{chgCell}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            })()}
 
             {/* Weight bar chart for top 10 */}
             {data.holdings?.slice(0, 10).some(h => h.weight_pct) && (
@@ -610,12 +670,16 @@ function EtfHoldingsPanel({ symbol }) {
                   const max = data.holdings[0]?.weight_pct || 1
                   return (
                     <div key={i} className="flex items-center gap-1 mb-0.5">
-                      <span className="text-[9px] text-gray-500 w-12 truncate flex-shrink-0">{h.stock_code}</span>
+                      <span className="text-[9px] text-gray-500 w-12 truncate flex-shrink-0">
+                        {h.stock_code || h.stock_name?.slice(0, 4)}
+                      </span>
                       <div className="flex-1 h-2 bg-[#0A0A0A] rounded overflow-hidden">
                         <div className="h-full rounded"
                           style={{ width: `${h.weight_pct / max * 100}%`, background: '#40C4FF88' }} />
                       </div>
-                      <span className="text-[9px] text-[#FFA726] w-8 text-right flex-shrink-0">{h.weight_pct}%</span>
+                      <span className="text-[9px] text-[#FFA726] w-8 text-right flex-shrink-0">
+                        {h.weight_pct}%
+                      </span>
                     </div>
                   )
                 })}

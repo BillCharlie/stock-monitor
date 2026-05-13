@@ -1,31 +1,54 @@
 """
-Active ETF holdings fetcher for Taiwan exchange-listed active ETFs (主動式ETF).
-TWSE requires daily portfolio disclosure per exchange rules.
+Active ETF holdings fetcher — MoneyDJ primary, etfinfo.tw fallback.
 
-Fetch flow:
-  1. Cache hit (< 4 h)
-  2. TWSE portfolioData API  →  structured holdings list
-  3. Fallback: TWSE etfDailyInfo (basic NAV / count only)
+Fetch priority per ETF:
+  1. Cache hit  (< 4 h, same date)
+  2. MoneyDJ    Basic0007B page  →  pd.read_html
+  3. etfinfo.tw /etf/{code}/holdings  →  pd.read_html
+
+Key stored fields per holding row:
+    stock_code  str    "2330"
+    stock_name  str    "台積電"
+    weight_pct  float  15.23
+    shares      int    1_000_000
+
+Daily snapshot logic:
+  - Each successful fetch with a NEW date saves current to
+      cache/etf_holdings_{code}.json        (current)
+  - Before overwriting, old current is copied to
+      cache/etf_holdings_{code}_prev.json   (previous trading day)
+  - compute_changes(prev, curr) returns new/exited/increased/decreased positions
+
+Email section:
+  - build_etf_email_section(all_holdings) → HTML string
+  - Includes top 5 holdings + share-change badges
 """
 from __future__ import annotations
 
+import glob
+import io
 import json
 import logging
 import os
+import re
+import shutil
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta
+from html import escape
 
+import pandas as pd
 import requests
 
 logger = logging.getLogger(__name__)
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
+CACHE_DIR = os.path.join(os.getenv("DATA_DIR", os.path.dirname(__file__)), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-HOLDINGS_CACHE_TTL = 4 * 3600   # 4 hours
-ALL_CACHE_TTL      = 3 * 3600   # 3 hours (for the combined snapshot)
+HOLDINGS_CACHE_TTL = 4 * 3600    # 4 hours — skip re-fetch if cache is fresh
+ALL_CACHE_TTL      = 3 * 3600    # 3 hours — combined all-ETF snapshot
 
-# ── Master list of Taiwan active ETFs ────────────────────────────────────────
+# ── Master list ───────────────────────────────────────────────────────────────
 ACTIVE_ETFS: dict[str, str] = {
     # Stock-type (A)
     "00980A": "主動野村台灣優選",
@@ -67,178 +90,408 @@ _HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Referer": "https://www.twse.com.tw/",
-    "Accept-Language": "zh-TW,zh;q=0.9",
+    "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.moneydj.com/",
 }
 
 
-def _recent_trading_date() -> str:
-    """Return the most recent weekday as YYYYMMDD."""
-    d = datetime.now()
-    # If today is weekend go back to Friday
-    while d.weekday() >= 5:
-        d -= timedelta(days=1)
-    return d.strftime("%Y%m%d")
+# ── Parsing helpers ───────────────────────────────────────────────────────────
 
-
-def _parse_number(v: str) -> float | None:
-    """Parse number strings that may contain commas."""
+def _clean_number(v) -> float | None:
+    """Strip commas / % / spaces from a string number."""
     try:
-        return float(str(v).replace(",", "").strip())
+        s = str(v).replace(",", "").replace("%", "").replace(" ", "").strip()
+        return float(s) if s and s not in ("-", "—", "N/A", "") else None
     except (ValueError, AttributeError):
         return None
 
 
-# ── Primary: TWSE portfolioData API ──────────────────────────────────────────
-def _fetch_twse_portfolio(etf_code: str, date_str: str) -> list[dict]:
+def _extract_stock_code(raw: str) -> str:
     """
-    Returns list of holding dicts:
-        {stock_code, stock_name, shares, weight_pct}
-    Empty list on failure.
+    Extract a 4-6 digit TW stock code from various MoneyDJ column formats:
+      - "2330"                   → "2330"
+      - "台積電(2330)"            → "2330"
+      - "2330 台積電"             → "2330"
     """
-    url = "https://www.twse.com.tw/rwd/zh/ETF/portfolioData"
-    params = {"date": date_str, "stockNo": etf_code, "response": "json"}
-    try:
-        resp = requests.get(url, params=params, headers=_HEADERS, timeout=15, verify=False)
-        resp.raise_for_status()
-        raw = resp.json()
-    except Exception as e:
-        logger.warning("TWSE portfolioData failed %s %s: %s", etf_code, date_str, e)
-        return []
+    raw = str(raw).strip()
+    # Pure digit/letter code (e.g. "2330", "00940")
+    if re.fullmatch(r"[0-9A-Z]{4,8}", raw):
+        return raw
+    # Embedded in parentheses: "台積電(2330)"
+    m = re.search(r"\(([0-9A-Z]{4,8})\)", raw)
+    if m:
+        return m.group(1)
+    # Leading digits followed by space: "2330 台積電"
+    m = re.match(r"^([0-9]{4,8})\s", raw)
+    if m:
+        return m.group(1)
+    return ""
 
-    if raw.get("stat") != "OK":
-        # Try yesterday if today's data not yet available
-        return []
 
-    fields = raw.get("fields", [])
-    data   = raw.get("data", [])
-    if not data:
-        return []
+def _find_holdings_table(tables: list[pd.DataFrame]) -> pd.DataFrame | None:
+    """
+    From a list of DataFrames parsed by pd.read_html, return the one that
+    looks like an ETF holdings table (has weight / shares columns).
+    """
+    keywords_weight = {"比重", "權重", "佔比", "weight", "%"}
+    keywords_shares = {"持有股數", "持有張數", "股數", "張數", "shares"}
 
-    # Detect column indices by field name keywords
-    def col(kw: str) -> int:
-        for i, f in enumerate(fields):
-            if kw in str(f):
-                return i
-        return -1
+    best: pd.DataFrame | None = None
+    best_score = 0
+    for df in tables:
+        if df.empty or len(df) < 2:
+            continue
+        all_cols = " ".join(str(c) for c in df.columns).lower()
+        score = 0
+        if any(k in all_cols for k in keywords_weight):
+            score += 2
+        if any(k in all_cols for k in keywords_shares):
+            score += 2
+        if any(k in all_cols for k in {"代號", "股票", "名稱", "bond", "債券"}):
+            score += 1
+        if score > best_score and len(df) >= 3:
+            best_score = score
+            best = df
+    return best
 
-    idx_code   = col("代號")
-    idx_name   = col("名稱")
-    idx_shares = col("股數") if col("股數") >= 0 else col("持有")
-    idx_weight = col("比重") if col("比重") >= 0 else col("淨資產")
+
+def _parse_holdings_df(df: pd.DataFrame) -> list[dict]:
+    """
+    Convert a raw holdings DataFrame into a clean list of dicts.
+    Handles variable column naming conventions across ETFs.
+    """
+    cols = list(df.columns)
+    col_str = " ".join(str(c) for c in cols).lower()
+
+    # ── Identify key columns by content pattern ───────────────────────────────
+    code_col   = None
+    name_col   = None
+    weight_col = None
+    shares_col = None
+
+    for c in cols:
+        cs = str(c).lower()
+        if any(k in cs for k in ["代號", "code", "股票代", "symbol"]):
+            code_col = c
+        elif any(k in cs for k in ["名稱", "name", "股票名", "債券名", "標的"]):
+            name_col = c
+        elif any(k in cs for k in ["比重", "權重", "佔淨資", "weight", "%"]):
+            if weight_col is None:
+                weight_col = c
+        elif any(k in cs for k in ["持有股數", "持有張數", "股數", "張數", "shares"]):
+            shares_col = c
+
+    # If no dedicated code column, we'll extract from the name column
+    if code_col is None and name_col is None:
+        # Fallback: first text-ish column is name/code
+        for c in cols:
+            sample = str(df[c].dropna().iloc[0]) if not df[c].dropna().empty else ""
+            if re.search(r"[一-龥A-Za-z]", sample) or re.match(r"\d{4}", sample):
+                name_col = c
+                break
 
     holdings = []
-    for row in data:
-        try:
-            code   = str(row[idx_code]).strip()   if idx_code   >= 0 else ""
-            name   = str(row[idx_name]).strip()   if idx_name   >= 0 else ""
-            shares = _parse_number(row[idx_shares]) if idx_shares >= 0 else None
-            weight = _parse_number(row[idx_weight]) if idx_weight >= 0 else None
-            if code:
-                holdings.append({
-                    "stock_code": code,
-                    "stock_name": name,
-                    "shares":     int(shares) if shares is not None else None,
-                    "weight_pct": round(weight, 4) if weight is not None else None,
-                })
-        except (IndexError, ValueError):
+    for _, row in df.iterrows():
+        raw_code = str(row[code_col]).strip() if code_col else ""
+        raw_name = str(row[name_col]).strip() if name_col else ""
+
+        # If code column absent, try extracting from name
+        stock_code = _extract_stock_code(raw_code) if raw_code else _extract_stock_code(raw_name)
+
+        # Strip embedded code from name if present
+        stock_name = re.sub(r"\s*\([0-9A-Z]{4,8}\)\s*", "", raw_name).strip() or raw_name
+
+        weight = _clean_number(row[weight_col]) if weight_col else None
+        shares = None
+        if shares_col:
+            sv = _clean_number(row[shares_col])
+            shares = int(sv) if sv is not None else None
+
+        # Skip rows without meaningful data
+        if not stock_name and not stock_code:
+            continue
+        if stock_name in ("NaN", "nan", "—", "-", "None", ""):
             continue
 
+        holdings.append({
+            "stock_code": stock_code,
+            "stock_name": stock_name,
+            "weight_pct": round(weight, 4) if weight is not None else None,
+            "shares":     shares,
+        })
+
+    # Sort by weight desc (put None weights at end)
+    holdings.sort(
+        key=lambda h: h["weight_pct"] if h["weight_pct"] is not None else -1,
+        reverse=True,
+    )
     return holdings
 
 
-# ── Fallback: try the previous trading day ───────────────────────────────────
-def _fetch_with_retry(etf_code: str) -> tuple[list[dict], str]:
-    """Try today, then go back up to 5 trading days."""
-    d = datetime.now()
-    attempts = 0
-    while attempts < 7:
-        if d.weekday() < 5:
-            date_str = d.strftime("%Y%m%d")
-            holdings = _fetch_twse_portfolio(etf_code, date_str)
-            if holdings:
-                return holdings, date_str
-            attempts += 1
-        d -= timedelta(days=1)
-    return [], ""
+# ── MoneyDJ scraper (primary) ─────────────────────────────────────────────────
+
+def _moneydj_url(code: str) -> str:
+    return (
+        f"https://www.moneydj.com/ETF/X/Basic/Basic0007B.xdjhtm"
+        f"?etfid={code}.TW"
+    )
+
+
+def _scrape_moneydj(code: str) -> tuple[str, list[dict]]:
+    """
+    Scrape MoneyDJ ETF holdings page.
+    Returns (date_str "YYYY-MM-DD", holdings_list).
+    Returns ("", []) on failure.
+    """
+    url = _moneydj_url(code)
+    try:
+        resp = requests.get(url, headers=_HEADERS, timeout=20, verify=False)
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as e:
+        logger.warning("MoneyDJ fetch failed %s: %s", code, e)
+        return "", []
+
+    # ── Extract date ──────────────────────────────────────────────────────────
+    date_str = ""
+    m = re.search(r"資料日期[：:]\s*(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})", html)
+    if m:
+        y, mo, d = m.group(1), m.group(2).zfill(2), m.group(3).zfill(2)
+        date_str = f"{y}-{mo}-{d}"
+    else:
+        # Fallback: today
+        date_str = datetime.now().strftime("%Y-%m-%d")
+
+    # ── Parse tables ──────────────────────────────────────────────────────────
+    try:
+        tables = pd.read_html(io.StringIO(html), flavor="lxml")
+    except Exception:
+        try:
+            tables = pd.read_html(io.StringIO(html))
+        except Exception as e2:
+            logger.warning("pd.read_html failed for %s: %s", code, e2)
+            return date_str, []
+
+    df = _find_holdings_table(tables)
+    if df is None:
+        logger.info("No holdings table found on MoneyDJ for %s", code)
+        return date_str, []
+
+    holdings = _parse_holdings_df(df)
+    logger.info("MoneyDJ %s: %d holdings, date=%s", code, len(holdings), date_str)
+    return date_str, holdings
+
+
+# ── etfinfo.tw scraper (fallback) ─────────────────────────────────────────────
+
+def _scrape_etfinfo(code: str) -> tuple[str, list[dict]]:
+    """
+    Scrape etfinfo.tw holdings page as fallback.
+    Returns (date_str, holdings_list).
+    """
+    url = f"https://www.etfinfo.tw/etf/{code}/holdings"
+    try:
+        resp = requests.get(url, headers=_HEADERS, timeout=20, verify=False)
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as e:
+        logger.warning("etfinfo fetch failed %s: %s", code, e)
+        return "", []
+
+    # Extract date
+    date_str = ""
+    m = re.search(r"(\d{4})[/-](\d{2})[/-](\d{2})", html)
+    if m:
+        date_str = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    else:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+
+    try:
+        tables = pd.read_html(io.StringIO(html))
+    except Exception as e:
+        logger.warning("etfinfo pd.read_html failed %s: %s", code, e)
+        return date_str, []
+
+    df = _find_holdings_table(tables)
+    if df is None:
+        return date_str, []
+
+    holdings = _parse_holdings_df(df)
+    logger.info("etfinfo.tw %s: %d holdings, date=%s", code, len(holdings), date_str)
+    return date_str, holdings
+
+
+# ── Snapshot & change-detection ───────────────────────────────────────────────
+
+def _curr_path(code: str) -> str:
+    return os.path.join(CACHE_DIR, f"etf_holdings_{code}.json")
+
+def _prev_path(code: str) -> str:
+    return os.path.join(CACHE_DIR, f"etf_holdings_{code}_prev.json")
+
+
+def _load_json(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_json(path: str, data: dict) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("save_json failed %s: %s", path, e)
+
+
+def compute_changes(prev_result: dict, curr_result: dict) -> dict:
+    """
+    Compare previous and current holdings by shares count.
+    Returns:
+        {
+          new_positions:  [holding dicts],      # in curr but not prev
+          exited:         [holding dicts],       # in prev but not curr
+          increased:      [{...holding, shares_delta, prev_shares}],
+          decreased:      [{...holding, shares_delta, prev_shares}],
+          unchanged_count: int,
+          prev_date:  str,
+          curr_date:  str,
+        }
+    """
+    prev_holdings = prev_result.get("holdings", [])
+    curr_holdings = curr_result.get("holdings", [])
+
+    prev_map = {h["stock_code"]: h for h in prev_holdings if h.get("stock_code")}
+    curr_map = {h["stock_code"]: h for h in curr_holdings if h.get("stock_code")}
+
+    new_positions, exited, increased, decreased, unchanged_count = [], [], [], [], 0
+
+    for sc, curr in curr_map.items():
+        if sc not in prev_map:
+            new_positions.append(curr)
+        else:
+            prev = prev_map[sc]
+            cs = curr.get("shares") or 0
+            ps = prev.get("shares") or 0
+            delta = cs - ps
+            if delta > 0:
+                increased.append({**curr, "shares_delta": delta, "prev_shares": ps})
+            elif delta < 0:
+                decreased.append({**curr, "shares_delta": delta, "prev_shares": ps})
+            else:
+                unchanged_count += 1
+
+    for sc in prev_map:
+        if sc not in curr_map:
+            exited.append(prev_map[sc])
+
+    # Sort by absolute delta size
+    increased.sort(key=lambda x: abs(x["shares_delta"]), reverse=True)
+    decreased.sort(key=lambda x: abs(x["shares_delta"]), reverse=True)
+
+    return {
+        "new_positions":   new_positions,
+        "exited":          exited,
+        "increased":       increased,
+        "decreased":       decreased,
+        "unchanged_count": unchanged_count,
+        "prev_date":       prev_result.get("date", ""),
+        "curr_date":       curr_result.get("date", ""),
+    }
 
 
 # ── Main public interface ─────────────────────────────────────────────────────
+
 def fetch_etf_holdings(etf_code: str, force_refresh: bool = False) -> dict:
     """
     Fetch portfolio holdings for one active ETF.
 
     Returns:
-        {code, name, type, date, holdings: [{stock_code, stock_name, shares, weight_pct}],
-         top10_weight, total_holdings, fetched_at, error?}
+        {
+          code, name, type, date,
+          holdings: [{stock_code, stock_name, shares, weight_pct}],
+          top10_weight, total_holdings, fetched_at,
+          changes: {new_positions, exited, increased, decreased, ...},
+          error?
+        }
     """
     code_upper = etf_code.upper().replace(".TW", "")
-    cache_path = os.path.join(CACHE_DIR, f"etf_holdings_{code_upper}.json")
+    curr_p     = _curr_path(code_upper)
+    prev_p     = _prev_path(code_upper)
 
-    if not force_refresh and os.path.exists(cache_path):
-        age = time.time() - os.path.getmtime(cache_path)
+    # ── Serve from cache if fresh ─────────────────────────────────────────────
+    if not force_refresh and os.path.exists(curr_p):
+        age = time.time() - os.path.getmtime(curr_p)
         if age < HOLDINGS_CACHE_TTL:
-            try:
-                with open(cache_path, encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
+            cached = _load_json(curr_p)
+            if cached.get("holdings") or cached.get("error"):
+                return cached
 
-    name = ACTIVE_ETFS.get(code_upper, code_upper)
+    name     = ACTIVE_ETFS.get(code_upper, code_upper)
     etf_type = "bond" if code_upper.endswith("D") else "stock"
 
-    holdings, date_str = _fetch_with_retry(code_upper)
+    # ── Fetch from sources ───────────────────────────────────────────────────
+    date_str, holdings = _scrape_moneydj(code_upper)
+    if not holdings:
+        logger.info("%s MoneyDJ empty — trying etfinfo.tw fallback", code_upper)
+        date_str, holdings = _scrape_etfinfo(code_upper)
 
     if not holdings:
         result = {
             "code":           code_upper,
             "name":           name,
             "type":           etf_type,
-            "date":           _recent_trading_date(),
+            "date":           date_str or datetime.now().strftime("%Y-%m-%d"),
             "holdings":       [],
             "top10_weight":   None,
             "total_holdings": 0,
             "fetched_at":     datetime.now().isoformat(),
-            "error":          "無法取得投資組合（非交易日或資料尚未更新）",
+            "error":          "無法取得投資組合（MoneyDJ + etfinfo 均失敗）",
         }
+        _save_json(curr_p, result)
+        return result
+
+    # ── Compute top-10 weight ─────────────────────────────────────────────────
+    weighted = [h for h in holdings if h.get("weight_pct") is not None]
+    top10_w  = round(sum(h["weight_pct"] for h in weighted[:10]), 2) if weighted else None
+
+    result = {
+        "code":           code_upper,
+        "name":           name,
+        "type":           etf_type,
+        "date":           date_str,
+        "holdings":       holdings,
+        "top10_weight":   top10_w,
+        "total_holdings": len(holdings),
+        "fetched_at":     datetime.now().isoformat(),
+    }
+
+    # ── Snapshot rotation & change detection ─────────────────────────────────
+    prev_result = _load_json(curr_p)
+    if prev_result.get("holdings") and prev_result.get("date") != date_str:
+        # New trading day data arrived — rotate current → prev
+        shutil.copy2(curr_p, prev_p)
+        logger.info("%s new date %s (prev %s) — snapshot rotated",
+                    code_upper, date_str, prev_result.get("date"))
+
+    # Attach change summary if we have a previous snapshot with share data
+    prev_data = _load_json(prev_p)
+    if prev_data.get("holdings"):
+        result["changes"] = compute_changes(prev_data, result)
     else:
-        # Sort by weight desc
-        holdings_sorted = sorted(
-            [h for h in holdings if h.get("weight_pct") is not None],
-            key=lambda x: x["weight_pct"],
-            reverse=True,
-        )
-        # Add unweighted rows at end
-        holdings_no_w = [h for h in holdings if h.get("weight_pct") is None]
-        all_holdings = holdings_sorted + holdings_no_w
+        result["changes"] = None
 
-        top10_w = sum(h["weight_pct"] for h in holdings_sorted[:10] if h["weight_pct"])
-
-        result = {
-            "code":           code_upper,
-            "name":           name,
-            "type":           etf_type,
-            "date":           date_str,
-            "holdings":       all_holdings,
-            "top10_weight":   round(top10_w, 2) if top10_w else None,
-            "total_holdings": len(all_holdings),
-            "fetched_at":     datetime.now().isoformat(),
-        }
-
-    # Persist cache
-    try:
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False)
-    except Exception:
-        pass
-
+    _save_json(curr_p, result)
     return result
 
 
 def fetch_all_etf_holdings(force_refresh: bool = False) -> dict[str, dict]:
     """
     Fetch holdings for every active ETF in ACTIVE_ETFS.
-    Returns {etf_code: holdings_dict}.
+    Returns {etf_code: result_dict}.
     """
     all_cache = os.path.join(CACHE_DIR, "etf_holdings_ALL.json")
     if not force_refresh and os.path.exists(all_cache):
@@ -255,16 +508,18 @@ def fetch_all_etf_holdings(force_refresh: bool = False) -> dict[str, dict]:
     for code in ACTIVE_ETFS:
         try:
             results[code] = fetch_etf_holdings(code, force_refresh=force_refresh)
-            logger.info("  %s: %d holdings", code,
-                        results[code].get("total_holdings", 0))
+            logger.info("  %s: %d holdings, date=%s",
+                        code,
+                        results[code].get("total_holdings", 0),
+                        results[code].get("date", ""))
         except Exception as e:
-            logger.warning("  %s fetch error: %s", code, e)
+            logger.warning("  %s error: %s", code, e)
             results[code] = {
                 "code": code, "name": ACTIVE_ETFS[code],
                 "holdings": [], "total_holdings": 0,
                 "error": str(e),
             }
-        time.sleep(0.5)   # be polite to TWSE
+        time.sleep(1.2)   # polite delay between MoneyDJ requests
 
     try:
         with open(all_cache, "w", encoding="utf-8") as f:
@@ -276,36 +531,132 @@ def fetch_all_etf_holdings(force_refresh: bool = False) -> dict[str, dict]:
     return results
 
 
+# ── Cross-ETF analysis ────────────────────────────────────────────────────────
+
+def cross_etf_common_holdings(all_holdings: dict[str, dict],
+                               min_etfs: int = 2) -> list[dict]:
+    """
+    Find stocks held by >= min_etfs active ETFs simultaneously.
+    Returns list of {stock_code, stock_name, etf_count, etfs, total_shares, avg_weight}.
+    """
+    stock_info: dict[str, dict] = defaultdict(lambda: {
+        "stock_name": "",
+        "etfs": [],
+        "total_shares": 0,
+        "weights": [],
+    })
+
+    for code, info in all_holdings.items():
+        if info.get("error") or not info.get("holdings"):
+            continue
+        for h in info["holdings"]:
+            sc = h.get("stock_code", "")
+            if not sc:
+                continue
+            si = stock_info[sc]
+            si["stock_name"] = h.get("stock_name", "")
+            si["etfs"].append(code)
+            si["total_shares"] += h.get("shares") or 0
+            if h.get("weight_pct") is not None:
+                si["weights"].append(h["weight_pct"])
+
+    result = []
+    for sc, si in stock_info.items():
+        if len(si["etfs"]) >= min_etfs:
+            result.append({
+                "stock_code":   sc,
+                "stock_name":   si["stock_name"],
+                "etf_count":    len(si["etfs"]),
+                "etfs":         si["etfs"],
+                "total_shares": si["total_shares"],
+                "avg_weight":   round(sum(si["weights"]) / len(si["weights"]), 2)
+                                if si["weights"] else None,
+            })
+
+    result.sort(key=lambda x: x["etf_count"], reverse=True)
+    return result
+
+
+# ── Email HTML section ────────────────────────────────────────────────────────
+
+def _changes_badge(changes: dict | None) -> str:
+    """Compact HTML badge showing key changes from previous day."""
+    if not changes:
+        return ""
+    new_c = len(changes.get("new_positions", []))
+    exit_c = len(changes.get("exited", []))
+    inc_c = len(changes.get("increased", []))
+    dec_c = len(changes.get("decreased", []))
+    if not any([new_c, exit_c, inc_c, dec_c]):
+        return ""
+    parts = []
+    if new_c:   parts.append(f"<span style='color:#26A69A'>+{new_c}新</span>")
+    if exit_c:  parts.append(f"<span style='color:#EF5350'>-{exit_c}出</span>")
+    if inc_c:   parts.append(f"<span style='color:#40C4FF'>↑{inc_c}加</span>")
+    if dec_c:   parts.append(f"<span style='color:#FFA726'>↓{dec_c}減</span>")
+    return " ".join(parts)
+
+
 def build_etf_email_section(all_holdings: dict[str, dict]) -> str:
     """
-    Generate an HTML section for the daily email report
-    summarising each active ETF's top holdings.
+    Generate HTML section for daily email showing each active ETF's
+    top holdings + change summary from previous trading day.
     """
-    from html import escape
-
     stock_etfs = {k: v for k, v in all_holdings.items() if not k.endswith("D")}
     bond_etfs  = {k: v for k, v in all_holdings.items() if k.endswith("D")}
 
-    def etf_block(code: str, info: dict) -> str:
-        name  = escape(info.get("name", code))
-        date  = escape(info.get("date", ""))
-        total = info.get("total_holdings", 0)
-        top10 = info.get("top10_weight")
-        error = info.get("error")
+    # ── Cross-ETF common holdings block ──────────────────────────────────────
+    common = cross_etf_common_holdings(all_holdings, min_etfs=3)
+    common_rows = "".join(
+        f"<tr>"
+        f"<td style='padding:3px 8px;color:#40C4FF'>{escape(h['stock_code'])}</td>"
+        f"<td style='padding:3px 8px'>{escape(h['stock_name'])}</td>"
+        f"<td style='padding:3px 8px;text-align:center'>{h['etf_count']} 檔</td>"
+        f"<td style='padding:3px 8px;color:#FFA726'>"
+        f"{h['avg_weight']}%</td>"
+        f"<td style='padding:3px 8px;font-size:10px;color:#888'>"
+        f"{escape(', '.join(h['etfs'][:6]))}</td>"
+        f"</tr>"
+        for h in common[:15]
+    )
+    cross_block = f"""
+<h3 style="color:#7AB8FF;margin-top:18px">🔗 多檔主動ETF共同持股（≥3檔）</h3>
+<table style="border-collapse:collapse;width:100%;font-size:12px">
+<tr style="background:#0A1A2A;color:#888;font-size:11px">
+  <th style="padding:3px 8px;text-align:left">代號</th>
+  <th style="padding:3px 8px;text-align:left">名稱</th>
+  <th style="padding:3px 8px;text-align:center">被持數</th>
+  <th style="padding:3px 8px;text-align:left">平均權重</th>
+  <th style="padding:3px 8px;text-align:left">持有ETF</th>
+</tr>
+{common_rows}
+</table>""" if common else ""
+
+    # ── Per-ETF rows ──────────────────────────────────────────────────────────
+    def etf_row(code: str, info: dict) -> str:
+        name    = escape(info.get("name", code))
+        date    = escape(info.get("date", ""))
+        total   = info.get("total_holdings", 0)
+        top10   = info.get("top10_weight")
+        error   = info.get("error")
+        changes = info.get("changes")
+        badge   = _changes_badge(changes)
 
         if error or not info.get("holdings"):
             return (
-                f"<tr><td style='padding:4px 8px'><strong>{name}</strong> "
-                f"<span style='color:#888;font-size:11px'>{code}</span></td>"
-                f"<td colspan='3' style='padding:4px 8px;color:#888;font-size:12px'>"
+                f"<tr>"
+                f"<td style='padding:4px 8px'><strong>{name}</strong> "
+                f"<span style='color:#888;font-size:10px'>{code}</span></td>"
+                f"<td colspan='3' style='padding:4px 8px;color:#888;font-size:11px'>"
                 f"{escape(error or '無資料')}</td></tr>"
             )
 
         top5 = info["holdings"][:5]
         top5_html = ", ".join(
-            f"<span style='color:#40C4FF'>{escape(h['stock_code'])}</span>"
+            f"<span style='color:#40C4FF'>{escape(h['stock_code'] or '')}</span>"
             f" {escape(h['stock_name'])}"
-            + (f" <span style='color:#FFA726'>{h['weight_pct']}%</span>" if h.get("weight_pct") else "")
+            + (f" <span style='color:#FFA726'>{h['weight_pct']}%</span>"
+               if h.get("weight_pct") else "")
             for h in top5
         )
 
@@ -313,35 +664,36 @@ def build_etf_email_section(all_holdings: dict[str, dict]) -> str:
             f"<tr>"
             f"<td style='padding:4px 8px;white-space:nowrap'>"
             f"<strong>{name}</strong>"
-            f"<span style='color:#888;font-size:10px;margin-left:4px'>{code}</span></td>"
+            f"<span style='color:#888;font-size:10px;margin-left:4px'>{code}</span>"
+            f"{'&nbsp;&nbsp;' + badge if badge else ''}</td>"
             f"<td style='padding:4px 8px;font-size:11px;color:#888'>{date}</td>"
-            f"<td style='padding:4px 8px;font-size:11px'>{total} 檔</td>"
-            f"<td style='padding:4px 8px;font-size:11px'>"
-            f"Top10占比 <strong style='color:#FFA726'>"
-            f"{f'{top10}%' if top10 else '—'}</strong><br>"
-            f"<span style='font-size:10px;color:#aaa'>{top5_html}</span></td>"
+            f"<td style='padding:4px 8px;font-size:11px'>{total} 檔"
+            f"{'&nbsp;Top10 <strong style=\"color:#FFA726\">' + str(top10) + '%</strong>' if top10 else ''}</td>"
+            f"<td style='padding:4px 8px;font-size:11px;color:#aaa'>{top5_html}</td>"
             f"</tr>"
         )
 
     def section_table(title: str, etfs: dict) -> str:
         if not etfs:
             return ""
-        rows = "".join(etf_block(c, v) for c, v in etfs.items())
+        rows = "".join(etf_row(c, v) for c, v in etfs.items())
         return f"""
 <h3 style="color:#7AB8FF;margin-top:18px">{escape(title)}</h3>
 <table style="border-collapse:collapse;width:100%;font-size:13px">
 <tr style="background:#0A1A2A;color:#888;font-size:11px">
-  <th style="padding:4px 8px;text-align:left">ETF</th>
+  <th style="padding:4px 8px;text-align:left">ETF（昨日變化）</th>
   <th style="padding:4px 8px;text-align:left">日期</th>
-  <th style="padding:4px 8px;text-align:left">持股數</th>
+  <th style="padding:4px 8px;text-align:left">持股數 / Top10</th>
   <th style="padding:4px 8px;text-align:left">前5大持股</th>
 </tr>
 {rows}
 </table>"""
 
     return (
-        "<h2 style='color:#40C4FF;border-bottom:1px solid #1A2A3A;padding-bottom:6px'>"
-        "🏦 主動式ETF 投資組合摘要</h2>"
+        "\n<h2 style='color:#40C4FF;border-bottom:1px solid #1A2A3A;"
+        "padding-bottom:6px;margin-top:24px'>"
+        "🏦 主動式ETF 投資組合摘要</h2>\n"
         + section_table("股票型主動ETF (A類)", stock_etfs)
         + section_table("債券型主動ETF (D類)", bond_etfs)
+        + cross_block
     )
