@@ -33,7 +33,7 @@ from indicators import (
     calculate_rsi,
     series_to_list,
 )
-from stock_data import df_to_ohlcv_list, get_investors_data, get_ohlcv, get_quote
+from stock_data import df_to_ohlcv_list, get_investors_data, get_ohlcv, get_quote, get_tw_margin_data
 from watchlist import MARKET_INDICES, WATCHLIST
 from realtime_data import get_realtime_quote, get_intraday_kline, validate_symbol
 from chip_analysis import (
@@ -426,6 +426,17 @@ def get_stock_quote(symbol: str):
 @app.get("/api/stocks/{symbol}/investors")
 def get_stock_investors(symbol: str):
     return get_investors_data(symbol)
+
+
+# ─── Margin trading (融資融券) ───────────────────────────────────────────────
+
+@app.get("/api/stocks/{symbol}/margin")
+def get_stock_margin(symbol: str):
+    """Get 融資融券 (margin/short-sell balance) for Taiwan stocks — last 5 trading days."""
+    upper = symbol.upper()
+    if not (upper.endswith(".TW") or upper.endswith(".TWO")):
+        raise HTTPException(status_code=400, detail="融資融券 only available for Taiwan stocks (.TW / .TWO)")
+    return get_tw_margin_data(symbol)
 
 
 # ─── Real-time quote (for intraday updates) ──────────────────────────────────
