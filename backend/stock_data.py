@@ -293,32 +293,35 @@ def get_ohlcv(symbol: str, interval: str = "1d", force_refresh: bool = False) ->
 def get_quote(symbol: str) -> dict:
     """
     Get latest price and change info.
-    Priority: yfinance fast_info → TWSE/TPEX (Taiwan fallback only).
+    Priority:
+      1. yfinance history(5d)  — reliable close price for both TW and US
+      2. TWSE/TPEX REST API    — fallback for Taiwan stocks
     """
-    # ── Step 1: yfinance fast_info (works for TW and US) ─────────────────────
+    # ── Step 1: yfinance history (more reliable than fast_info for TW stocks) ─
     try:
-        t = yf.Ticker(symbol)
-        info = t.fast_info
-        price      = getattr(info, "last_price", None)
-        prev_close = getattr(info, "previous_close", None)
-        change     = (price - prev_close) if price and prev_close else None
-        change_pct = (change / prev_close * 100) if change and prev_close else None
-        volume     = int(getattr(info, "regular_market_volume", 0) or 0)
-
-        if price:
-            return {k: v for k, v in {
-                "price":      round(float(price), 4),
-                "change":     round(float(change), 4)     if change     else None,
-                "change_pct": round(float(change_pct), 2) if change_pct else None,
+        t  = yf.Ticker(symbol)
+        df = t.history(period="5d", interval="1d", auto_adjust=True, actions=False)
+        if not df.empty:
+            close      = float(df["Close"].iloc[-1])
+            prev_close = float(df["Close"].iloc[-2]) if len(df) > 1 else close
+            change     = close - prev_close
+            change_pct = (change / prev_close * 100) if prev_close else 0
+            volume     = int(df["Volume"].iloc[-1]) if "Volume" in df.columns else 0
+            logger.info("yfinance quote OK for %s: %.2f", symbol, close)
+            return {
+                "price":      round(close, 4),
+                "change":     round(change, 4),
+                "change_pct": round(change_pct, 2),
                 "volume":     volume,
-            }.items() if v is not None}
+            }
+        logger.warning("yfinance history empty for %s", symbol)
     except Exception as e:
         logger.warning("yfinance quote failed for %s: %s", symbol, e)
 
     # ── Step 2: TWSE/TPEX fallback for Taiwan stocks ──────────────────────────
     upper = symbol.upper()
     if upper.endswith(".TW") or upper.endswith(".TWO"):
-        logger.info("Trying TWSE fallback quote for %s", symbol)
+        logger.info("TWSE/TPEX fallback quote for %s", symbol)
         tw_quote = _get_tw_quote_from_twse(symbol)
         if tw_quote:
             return tw_quote

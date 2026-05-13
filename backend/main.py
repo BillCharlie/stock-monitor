@@ -649,6 +649,23 @@ def test_email(to: Optional[str] = Query(None)):
     return result
 
 
+@app.get("/api/test/quotes")
+def test_quotes(symbols: str = Query(..., description="逗號分隔代號，如 5347.TW,5274.TW")):
+    """Batch quote test — returns price or error for each symbol. No auth needed."""
+    from stock_data import get_quote
+    results = {}
+    for raw in symbols.split(","):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            q = get_quote(s)
+            results[s] = q if q else "❌ 無資料"
+        except Exception as e:
+            results[s] = f"❌ {e}"
+    return results
+
+
 @app.get("/api/test/env", dependencies=[Depends(_require_report_auth)])
 def test_env():
     """Return which expected env vars are present (values masked) for diagnosis."""
