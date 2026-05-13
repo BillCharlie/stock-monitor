@@ -13,7 +13,7 @@ backend/cache/
 backend/data/
 
 # ── Built frontend (local dev build → backend/static) ─────────
-backend/static/
+# backend/static/ — tracked so Railway serves the correct build
 
 # ── Node / frontend ───────────────────────────────────────────
 frontend/node_modules/

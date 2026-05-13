@@ -2,6 +2,6 @@
 __pycache__/
 *.pyc
 cache/
-static/
+# static/ — tracked for Railway deployment
 venv/
 custom_stocks.json
