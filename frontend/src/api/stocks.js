@@ -110,4 +110,10 @@ export const api = {
 
   getTrumpNews: (force = false) =>
     request(`/trump-news${force ? '?force=true' : ''}`),
+
+  getEtfHoldings: (symbol, refresh = false) =>
+    request(`/etf-holdings/${encodeURIComponent(symbol)}${refresh ? '?refresh=true' : ''}`),
+
+  getAllEtfHoldings: (refresh = false) =>
+    request(`/etf-holdings${refresh ? '?refresh=true' : ''}`),
 }

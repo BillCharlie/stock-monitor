@@ -507,6 +507,127 @@ function InvestorsUS({ data }) {
   )
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const isActiveETF = (symbol) => {
+  const u = (symbol || '').toUpperCase().replace('.TW', '')
+  return /^\d{5}[AD]$/.test(u)
+}
+
+// ── Active ETF holdings panel ─────────────────────────────────────────────────
+function EtfHoldingsPanel({ symbol }) {
+  const code = symbol.toUpperCase().replace('.TW', '')
+  const [data, setData]       = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const load = (refresh = false) => {
+    if (refresh) setRefreshing(true)
+    else setLoading(true)
+    api.getEtfHoldings(code, refresh)
+      .then(d => { setData(d); setLoading(false); setRefreshing(false) })
+      .catch(() => { setData({ error: '無法載入持倉資料' }); setLoading(false); setRefreshing(false) })
+  }
+
+  useEffect(() => { load() }, [symbol])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const etfType = code.endsWith('D') ? 'bond' : 'stock'
+  const typeLabel = etfType === 'bond' ? '債券型 D' : '股票型 A'
+  const typeColor = etfType === 'bond' ? 'text-[#AB47BC]' : 'text-[#40C4FF]'
+
+  return (
+    <div className="border border-[#1E1E1E] rounded overflow-hidden">
+      <div className="w-full flex items-center justify-between px-3 py-2 bg-[#0D1020]">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-gray-300 text-xs">主動式ETF 投資組合</span>
+          <span className={`text-[9px] px-1.5 py-0.5 rounded bg-[#1A1A2E] border border-[#2A2A4A] ${typeColor}`}>
+            {typeLabel}
+          </span>
+        </div>
+        <button
+          onClick={() => load(true)}
+          disabled={refreshing}
+          className="text-[9px] text-gray-600 hover:text-gray-300 px-2 py-0.5 rounded border border-[#1E1E1E] hover:border-[#3A3A3A] transition-colors"
+        >
+          {refreshing ? '更新中...' : '↻ 刷新'}
+        </button>
+      </div>
+
+      <div className="px-3 pb-3 border-t border-[#1E1E1E]">
+        {loading && <div className="text-gray-600 text-[10px] py-3 text-center">載入中...</div>}
+        {!loading && data?.error && (
+          <div className="text-yellow-600 text-[10px] py-2">{data.error}</div>
+        )}
+        {!loading && data && !data.error && (
+          <div className="space-y-2 pt-2">
+            {/* Summary row */}
+            <div className="flex items-center gap-3 text-[10px] text-gray-500">
+              <span>共 <strong className="text-gray-200">{data.total_holdings}</strong> 檔持股</span>
+              {data.top10_weight && (
+                <span>前10大占比 <strong className="text-[#FFA726]">{data.top10_weight}%</strong></span>
+              )}
+              <span className="ml-auto text-gray-700">更新: {data.date}</span>
+            </div>
+
+            {/* Holdings table */}
+            {data.holdings?.length > 0 && (
+              <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                <table className="w-full text-[10px]">
+                  <thead className="sticky top-0 bg-[#0D0D0D]">
+                    <tr className="text-gray-600 border-b border-[#1E1E1E]">
+                      <td className="py-1 pr-1 w-5">#</td>
+                      <td className="py-1 pr-2">代號</td>
+                      <td className="py-1 pr-2">名稱</td>
+                      <td className="py-1 pr-2 text-right">持股數</td>
+                      <td className="py-1 text-right text-[#FFA726]">占比%</td>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.holdings.map((h, i) => (
+                      <tr key={i} className="border-b border-[#111] hover:bg-[#111]">
+                        <td className="py-1 pr-1 text-gray-700">{i + 1}</td>
+                        <td className="py-1 pr-2 font-mono text-[#40C4FF]">{h.stock_code}</td>
+                        <td className="py-1 pr-2 text-gray-300 truncate max-w-[100px]">{h.stock_name}</td>
+                        <td className="py-1 pr-2 text-right font-mono text-gray-400">
+                          {h.shares != null ? h.shares.toLocaleString() : '—'}
+                        </td>
+                        <td className="py-1 text-right font-mono">
+                          {h.weight_pct != null
+                            ? <span className="text-[#FFA726]">{h.weight_pct}%</span>
+                            : <span className="text-gray-700">—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Weight bar chart for top 10 */}
+            {data.holdings?.slice(0, 10).some(h => h.weight_pct) && (
+              <div className="pt-1">
+                <div className="text-[9px] text-gray-600 mb-1">前10大持股占比</div>
+                {data.holdings.slice(0, 10).filter(h => h.weight_pct).map((h, i) => {
+                  const max = data.holdings[0]?.weight_pct || 1
+                  return (
+                    <div key={i} className="flex items-center gap-1 mb-0.5">
+                      <span className="text-[9px] text-gray-500 w-12 truncate flex-shrink-0">{h.stock_code}</span>
+                      <div className="flex-1 h-2 bg-[#0A0A0A] rounded overflow-hidden">
+                        <div className="h-full rounded"
+                          style={{ width: `${h.weight_pct / max * 100}%`, background: '#40C4FF88' }} />
+                      </div>
+                      <span className="text-[9px] text-[#FFA726] w-8 text-right flex-shrink-0">{h.weight_pct}%</span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Collapsible investors section ─────────────────────────────────────────────
 function InvestorsSection({ symbol }) {
   const isTW = symbol?.toUpperCase().endsWith('.TW') || symbol?.toUpperCase().endsWith('.TWO')
@@ -631,6 +752,9 @@ function SingleAnalysis({ symbol, stockName }) {
         <PredictionCard pred={data.prediction_5d} label="5日預測" />
         <PredictionCard pred={data.prediction_20d} label="20日預測" />
       </div>
+
+      {/* Active ETF holdings (only for 主動式ETF) */}
+      {isActiveETF(symbol) && <EtfHoldingsPanel symbol={symbol} />}
 
       {/* Investor / institutional data */}
       <InvestorsSection symbol={symbol} />

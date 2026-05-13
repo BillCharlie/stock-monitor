@@ -35,6 +35,12 @@ from indicators import (
 )
 from stock_data import df_to_ohlcv_list, get_investors_data, get_ohlcv, get_quote, get_tw_margin_data
 from watchlist import MARKET_INDICES, WATCHLIST
+from etf_holdings import (
+    fetch_etf_holdings,
+    fetch_all_etf_holdings,
+    build_etf_email_section,
+    ACTIVE_ETFS,
+)
 from realtime_data import get_realtime_quote, get_intraday_kline, validate_symbol
 from chip_analysis import (
     get_twse_chip_distribution,
@@ -56,6 +62,7 @@ STATIC_DIR            = os.path.join(_BASE_DIR, "static")
 # ─── In-memory caches ─────────────────────────────────────────────────────────
 _daily_report: dict = {}
 _stock_analyses: dict = {}
+_etf_holdings: dict = {}          # populated by 15:00 scheduler job
 
 
 def load_custom_stocks() -> list:
@@ -141,6 +148,16 @@ def _generate_and_deliver(trigger: str = "scheduler"):
         _gpt_report_html = html
         logger.info("Using fallback HTML report (GPT not available)")
 
+    # Append active ETF holdings section
+    try:
+        holdings = _etf_holdings if _etf_holdings else fetch_all_etf_holdings()
+        if holdings:
+            etf_section = build_etf_email_section(holdings)
+            # Insert before closing </div> of content block (or just append)
+            html = html + etf_section
+    except Exception as e:
+        logger.warning("ETF email section failed: %s", e)
+
     pdf_path = save_report_pdf(html, _daily_report)
     send_daily_report(html, _daily_report, pdf_path=pdf_path)
 
@@ -157,6 +174,19 @@ def _refresh_news():
     fetch_all_news(force=True)
     fetch_trump_news(force=True)
     logger.info("News cache refresh complete.")
+
+
+def _run_etf_holdings_refresh():
+    """15:00 scheduler: fetch all active ETF portfolio disclosures from TWSE."""
+    global _etf_holdings
+    logger.info("Running 15:00 active ETF holdings refresh (%d ETFs)...", len(ACTIVE_ETFS))
+    try:
+        _etf_holdings = fetch_all_etf_holdings(force_refresh=True)
+        ok  = sum(1 for v in _etf_holdings.values() if v.get("total_holdings", 0) > 0)
+        err = sum(1 for v in _etf_holdings.values() if v.get("error"))
+        logger.info("ETF holdings refresh done: %d OK, %d errors", ok, err)
+    except Exception as e:
+        logger.error("ETF holdings refresh failed: %s", e)
 
 
 @asynccontextmanager
@@ -176,6 +206,9 @@ async def lifespan(app: FastAPI):
                       id="morning_email")
     # Daily news refresh at 07:30
     scheduler.add_job(_refresh_news, "cron", hour=7, minute=30, id="news_refresh")
+    # Active ETF holdings: Mon–Fri 15:00 (after TWSE close + disclosure window)
+    scheduler.add_job(_run_etf_holdings_refresh, "cron",
+                      day_of_week="mon-fri", hour=15, minute=0, id="etf_holdings")
     scheduler.start()
     logger.info(f"Scheduler started — morning email at {report_hour:02d}:{report_minute:02d} (Asia/Taipei)")
 
@@ -437,6 +470,26 @@ def get_stock_margin(symbol: str):
     if not (upper.endswith(".TW") or upper.endswith(".TWO")):
         raise HTTPException(status_code=400, detail="融資融券 only available for Taiwan stocks (.TW / .TWO)")
     return get_tw_margin_data(symbol)
+
+
+# ─── Active ETF holdings ─────────────────────────────────────────────────────
+
+@app.get("/api/etf-holdings")
+def get_all_etf_holdings(refresh: bool = False):
+    """Return cached holdings for all active ETFs. Pass ?refresh=true to force re-fetch."""
+    global _etf_holdings
+    if refresh or not _etf_holdings:
+        _etf_holdings = fetch_all_etf_holdings(force_refresh=refresh)
+    return _etf_holdings
+
+
+@app.get("/api/etf-holdings/{symbol}")
+def get_single_etf_holdings(symbol: str, refresh: bool = False):
+    """Return holdings for one active ETF (e.g. 00980A or 00980A.TW)."""
+    code = symbol.upper().replace(".TW", "")
+    if code not in ACTIVE_ETFS:
+        raise HTTPException(status_code=404, detail=f"{symbol} 不在主動式ETF清單中")
+    return fetch_etf_holdings(code, force_refresh=refresh)
 
 
 # ─── Real-time quote (for intraday updates) ──────────────────────────────────
