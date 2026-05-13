@@ -27,11 +27,11 @@ CACHE_TTL = {
     "1mo": 7200,  # 2 hours
 }
 
-# Period to fetch per interval
+# Period to fetch per interval — enough for MA240 + long-term analysis
 INTERVAL_PERIOD = {
-    "1d": "2y",
-    "1wk": "5y",
-    "1mo": "max",
+    "1d": "5y",   # 5 years daily → ~1250 bars (MA240 needs 240+)
+    "1wk": "max", # full weekly history
+    "1mo": "max", # full monthly history
 }
 
 
@@ -66,327 +66,264 @@ def _save_cache(path: str, df: pd.DataFrame) -> None:
         logger.warning(f"Cache save failed: {e}")
 
 
-def _get_tw_stock_from_tradingview(symbol: str, max_retries: int = 3) -> pd.DataFrame:
-    """
-    Fallback: Fetch Taiwan stock data from TradingView using Playwright.
-    TradingView symbols: TWSE:3363 (Taiwan exchange format)
-    """
-    try:
-        from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-    except ImportError:
-        logger.warning("playwright not installed, skipping TradingView fallback")
-        return pd.DataFrame()
 
-    # Convert symbol: 3363.TW -> TWSE:3363
-    if symbol.endswith(".TW"):
-        tw_symbol = f"TWSE:{symbol[:-3]}"
+def _get_tw_stock_from_twse_api(symbol: str, months: int = 60) -> pd.DataFrame:
+    """
+    Fetch Taiwan stock OHLCV from TWSE, iterating month-by-month (NOT day-by-day).
+    TWSE STOCK_DAY returns ALL trading days for the queried month in one response,
+    so we only need one request per month — much faster and complete.
+
+    Supports both TWSE (.TW) and TPEX/OTC (.TWO) markets.
+    Date format in response: 民國紀年 YYY/MM/DD → add 1911 for Gregorian.
+    """
+    raw_code = symbol.split(".")[0]
+    suffix   = symbol.upper().rsplit(".", 1)[-1]   # "TW" or "TWO"
+
+    if suffix == "TWO":
+        # OTC stocks use TPEX API
+        base_url = "https://www.tpex.org.tw/web/stock/aftertrading/daily_trading_info/st43_result.php"
     else:
-        return pd.DataFrame()
+        base_url = "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
 
-    try:
-        for attempt in range(max_retries):
-            try:
-                with sync_playwright() as p:
-                    # Use headless browser
-                    browser = p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-                    context = browser.new_context(
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                    )
-                    page = context.new_page()
-                    
-                    # Navigate to TradingView chart
-                    url = f"https://www.tradingview.com/chart/?symbol={tw_symbol}"
-                    page.goto(url, wait_until="load", timeout=15000)
-                    time.sleep(2)  # Wait for data to load
-                    
-                    # Try to extract chart data from page
-                    data_script = page.content()
-                    
-                    browser.close()
-                    logger.warning(f"TradingView fetch incomplete for {symbol}")
-                    return pd.DataFrame()
-            except PlaywrightTimeoutError:
-                if attempt < max_retries - 1:
-                    logger.info(f"TradingView timeout, retry {attempt+1}/{max_retries} for {symbol}")
-                    continue
-                else:
-                    raise
-    except Exception as e:
-        logger.error(f"TradingView fallback failed for {symbol}: {e}")
-    
-    return pd.DataFrame()
+    records: list = []
+    cur = datetime.now()
 
+    for _ in range(months):
+        # Always use the 1st of the month — TWSE/TPEX return the whole month
+        year_month_day = cur.replace(day=1).strftime("%Y%m%d")
 
-def _get_tw_stock_from_twse_api(symbol: str, days: int = 250) -> pd.DataFrame:
-    """
-    Fetch Taiwan stock data directly from TWSE (Taiwan Stock Exchange).
-    TWSE API returns: [日期, 成交股數, 成交金額, 開盤價, 最高價, 最低價, 收盤價, 漲跌價差, 成交筆數, 註記]
-    Index: 0=date, 1=volume, 2=value, 3=open, 4=high, 5=low, 6=close, 7=change, 8=txn_count
-    Date format: 民國紀年 (e.g., 115/05/04 = 2026/05/04)
-    """
-    if not symbol.upper().endswith(".TW"):
-        return pd.DataFrame()
-    
-    stock_code = symbol[:symbol.find(".")]  # Remove .TW suffix
-    records = []
-    
-    try:
-        # Start from recent dates and work backwards
-        current_date = datetime.now()
-        request_count = 0
-        max_requests = 300  # Limit requests
-        days_checked = 0
-        max_days_to_check = 500  # Check up to 500 calendar days back
-        
-        while len(records) < days and request_count < max_requests and days_checked < max_days_to_check:
-            date_str = current_date.strftime("%Y%m%d")
-            days_checked += 1
-            
-            try:
-                url = "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
-                params = {
-                    "response": "json",
-                    "date": date_str,
-                    "stockNo": stock_code
-                }
-                resp = requests.get(url, params=params, timeout=5, verify=False)
-                request_count += 1
-                
-                if resp.status_code == 200:
-                    try:
-                        data = resp.json()
-                        # Check if we got valid response
-                        if data.get("stat") in ("OK", "ok") and "data" in data and data["data"]:
-                            # TWSE format: [date, volume, value, open, high, low, close, change, txn_count, notes]
-                            # Index: 0=date, 3=open, 4=high, 5=low, 6=close, 1=volume
-                            for row in data["data"]:
-                                try:
-                                    # Date format: 民國年/月/日 (e.g., 115/05/04)
-                                    # Convert to Gregorian: 民國 + 1911 = 西元
-                                    date_parts = row[0].split('/')
-                                    roc_year = int(date_parts[0])
-                                    gregorian_year = roc_year + 1911
-                                    date_str_gregorian = f"{gregorian_year}/{date_parts[1]}/{date_parts[2]}"
-                                    date_obj = datetime.strptime(date_str_gregorian, "%Y/%m/%d")
-                                    
-                                    # Parse prices and volume, removing commas and spaces
-                                    open_price = float(str(row[3]).replace(",", "").strip())
-                                    high_price = float(str(row[4]).replace(",", "").strip())
-                                    low_price = float(str(row[5]).replace(",", "").strip())
-                                    close_price = float(str(row[6]).replace(",", "").strip())
-                                    volume = int(str(row[1]).replace(",", "").strip())
-                                    
-                                    records.append({
-                                        "Date": date_obj,
-                                        "Open": open_price,
-                                        "High": high_price,
-                                        "Low": low_price,
-                                        "Close": close_price,
-                                        "Volume": volume,
-                                    })
-                                except (ValueError, IndexError) as e:
-                                    logger.debug(f"Failed to parse TWSE row {row}: {e}")
-                                    continue
-                    except json.JSONDecodeError:
-                        pass
-                
-                current_date -= timedelta(days=1)
-                time.sleep(0.05)  # Rate limiting
-                
-            except requests.RequestException as e:
-                logger.debug(f"TWSE fetch error for {date_str}: {e}")
-                current_date -= timedelta(days=1)
+        try:
+            if suffix == "TWO":
+                # TPEX uses different params and date format
+                roc_year  = cur.year - 1911
+                date_param = f"{roc_year}/{cur.month:02d}"
+                params = {"d": date_param, "stkno": raw_code, "o": "json"}
+                resp = requests.get(base_url, params=params,
+                                    headers={"User-Agent": "Mozilla/5.0"},
+                                    timeout=10, verify=False)
+            else:
+                params = {"response": "json", "date": year_month_day, "stockNo": raw_code}
+                resp = requests.get(base_url, params=params,
+                                    headers={"User-Agent": "Mozilla/5.0"},
+                                    timeout=10, verify=False)
+
+            if resp.status_code != 200:
+                cur = (cur.replace(day=1) - timedelta(days=1))
+                time.sleep(0.3)
                 continue
-        
-        if records:
-            df = pd.DataFrame(records)
-            df.set_index("Date", inplace=True)
-            df = df.sort_index()
-            df = df[~df.index.duplicated(keep="last")]
-            logger.info(f"Fetched {len(df)} records for {symbol} from TWSE ({request_count} requests)")
-            return df
-        else:
-            logger.warning(f"No data fetched for {symbol} from TWSE after {request_count} requests")
-    except Exception as e:
-        logger.error(f"TWSE API failed for {symbol}: {e}")
-    
-    return pd.DataFrame()
+
+            data = resp.json()
+
+            # ── TWSE parse ──────────────────────────────────────────────────
+            if suffix != "TWO":
+                if data.get("stat") not in ("OK", "ok") or not data.get("data"):
+                    cur = (cur.replace(day=1) - timedelta(days=1))
+                    time.sleep(0.3)
+                    continue
+                for row in data["data"]:
+                    try:
+                        dp = row[0].split("/")
+                        date_obj = datetime(int(dp[0]) + 1911, int(dp[1]), int(dp[2]))
+                        records.append({
+                            "Date":   date_obj,
+                            "Open":   float(str(row[3]).replace(",", "")),
+                            "High":   float(str(row[4]).replace(",", "")),
+                            "Low":    float(str(row[5]).replace(",", "")),
+                            "Close":  float(str(row[6]).replace(",", "")),
+                            "Volume": int(str(row[1]).replace(",", "")),
+                        })
+                    except (ValueError, IndexError):
+                        continue
+
+            # ── TPEX parse ───────────────────────────────────────────────────
+            else:
+                rows = data.get("aaData") or data.get("data") or []
+                for row in rows:
+                    try:
+                        dp = str(row[0]).split("/")
+                        date_obj = datetime(int(dp[0]) + 1911, int(dp[1]), int(dp[2]))
+                        records.append({
+                            "Date":   date_obj,
+                            "Open":   float(str(row[4]).replace(",", "")),
+                            "High":   float(str(row[5]).replace(",", "")),
+                            "Low":    float(str(row[6]).replace(",", "")),
+                            "Close":  float(str(row[7]).replace(",", "")),
+                            "Volume": int(str(row[1]).replace(",", "")),
+                        })
+                    except (ValueError, IndexError):
+                        continue
+
+        except Exception as e:
+            logger.debug("TWSE/TPEX fetch error %s %s: %s", symbol, year_month_day, e)
+
+        # Step back one month
+        cur = (cur.replace(day=1) - timedelta(days=1))
+        time.sleep(0.35)   # polite rate-limit: ~3 req/sec max
+
+    if not records:
+        logger.warning("No TWSE/TPEX data for %s after %d months", symbol, months)
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records)
+    df.set_index("Date", inplace=True)
+    df = df.sort_index()
+    df = df[~df.index.duplicated(keep="last")]
+    logger.info("TWSE/TPEX: %d records for %s (%d months fetched)", len(df), symbol, months)
+    return df
 
 
 def _get_tw_quote_from_twse(symbol: str) -> dict | None:
     """
-    Fetch latest price and change info from TWSE for Taiwan stocks.
-    TWSE format: [date, volume, value, open, high, low, close, change, txn_count, notes]
-    Returns dict with price, change, change_pct, volume.
-    Returns None if unable to fetch.
+    Fallback: fetch latest close/change from TWSE (TWSE listed) or TPEX (OTC).
+    Uses the month endpoint and grabs the last row — 1 request only.
     """
-    if not symbol.upper().endswith(".TW"):
-        return None
-    
-    stock_code = symbol[:symbol.find(".")]  # Remove .TW suffix
-    
+    raw_code = symbol.split(".")[0]
+    suffix   = symbol.upper().rsplit(".", 1)[-1]
+
+    cur = datetime.now()
+    for _ in range(3):   # try current month, then go back
+        try:
+            if suffix == "TWO":
+                roc_year   = cur.year - 1911
+                date_param = f"{roc_year}/{cur.month:02d}"
+                url    = "https://www.tpex.org.tw/web/stock/aftertrading/daily_trading_info/st43_result.php"
+                params = {"d": date_param, "stkno": raw_code, "o": "json"}
+                resp   = requests.get(url, params=params,
+                                      headers={"User-Agent": "Mozilla/5.0"},
+                                      timeout=8, verify=False)
+                data   = resp.json()
+                rows   = data.get("aaData") or data.get("data") or []
+                if rows:
+                    latest    = rows[-1]
+                    close     = float(str(latest[7]).replace(",", ""))
+                    prev_c    = float(str(rows[-2][7]).replace(",", "")) if len(rows) > 1 else close
+                    volume    = int(str(latest[1]).replace(",", ""))
+                    change    = close - prev_c
+                    return {"price": round(close, 4),
+                            "change": round(change, 4),
+                            "change_pct": round(change / prev_c * 100, 2) if prev_c else 0,
+                            "volume": volume}
+            else:
+                date_str = cur.replace(day=1).strftime("%Y%m%d")
+                url    = "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
+                params = {"response": "json", "date": date_str, "stockNo": raw_code}
+                resp   = requests.get(url, params=params,
+                                      headers={"User-Agent": "Mozilla/5.0"},
+                                      timeout=8, verify=False)
+                data   = resp.json()
+                if data.get("stat") in ("OK", "ok") and data.get("data"):
+                    rows   = data["data"]
+                    latest = rows[-1]
+                    close  = float(str(latest[6]).replace(",", ""))
+                    prev_c = float(str(rows[-2][6]).replace(",", "")) if len(rows) > 1 else close
+                    volume = int(str(latest[1]).replace(",", ""))
+                    change = close - prev_c
+                    return {"price": round(close, 4),
+                            "change": round(change, 4),
+                            "change_pct": round(change / prev_c * 100, 2) if prev_c else 0,
+                            "volume": volume}
+        except Exception as e:
+            logger.debug("TWSE/TPEX quote error %s: %s", symbol, e)
+
+        cur = (cur.replace(day=1) - timedelta(days=1))
+
+    return None
+
+
+def _fetch_yfinance(symbol: str, period: str, interval: str) -> pd.DataFrame:
+    """Shared yfinance fetch helper — returns cleaned DataFrame or empty."""
     try:
-        # Try to get latest trading data
-        current_date = datetime.now()
-        
-        for _ in range(10):  # Try last 10 days
-            date_str = current_date.strftime("%Y%m%d")
-            
-            try:
-                url = "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
-                params = {
-                    "response": "json",
-                    "date": date_str,
-                    "stockNo": stock_code
-                }
-                resp = requests.get(url, params=params, timeout=5, verify=False)
-                
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # Check if we got valid response
-                    if data.get("stat") in ("OK", "ok") and "data" in data and data["data"]:
-                        # Get the most recent record (last entry)
-                        latest = data["data"][-1]
-                        try:
-                            # Extract values with correct indices
-                            # Index: 0=date, 3=open, 4=high, 5=low, 6=close, 1=volume
-                            close_price = float(str(latest[6]).replace(",", "").strip())  # Close price
-                            volume = int(str(latest[1]).replace(",", "").strip())  # Volume
-                            
-                            # Get previous close to calculate change
-                            prev_close = close_price
-                            if len(data["data"]) > 1:
-                                prev_close = float(str(data["data"][-2][6]).replace(",", "").strip())
-                            
-                            change = close_price - prev_close
-                            change_pct = (change / prev_close * 100) if prev_close != 0 else 0
-                            
-                            logger.info(f"Got quote for {symbol} from TWSE: {close_price}")
-                            return {
-                                "price": round(close_price, 4),
-                                "change": round(change, 4),
-                                "change_pct": round(change_pct, 2),
-                                "volume": volume,
-                            }
-                        except (ValueError, IndexError) as e:
-                            logger.debug(f"Failed to parse TWSE quote: {e}")
-            except requests.RequestException:
-                pass
-            
-            current_date -= timedelta(days=1)
-            time.sleep(0.05)
-        
-        logger.warning(f"Could not fetch quote for {symbol} from TWSE")
-        return None
-        
+        ticker = yf.Ticker(symbol)
+        df = ticker.history(period=period, interval=interval,
+                            auto_adjust=True, actions=False)
+        if df.empty:
+            logger.warning("yfinance returned empty data for %s", symbol)
+            return pd.DataFrame()
+        df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+        df.index = df.index.tz_localize(None)
+        df = df[~df.index.duplicated(keep="last")]
+        df = df.sort_index()
+        logger.info("yfinance: %d records for %s (period=%s)", len(df), symbol, period)
+        return df
     except Exception as e:
-        logger.error(f"TWSE quote fetch failed for {symbol}: {e}")
-        return None
+        logger.warning("yfinance failed for %s: %s", symbol, e)
+        return pd.DataFrame()
 
 
 def get_ohlcv(symbol: str, interval: str = "1d", force_refresh: bool = False) -> pd.DataFrame:
     """
-    Get OHLCV data with intelligent fallback for different sources.
-    For Taiwan stocks (.TW): TWSE API → yfinance → TradingView
-    For others: yfinance
+    Get OHLCV data.  Priority order for ALL symbols:
+      1. yfinance  — fast, full history, works for both TW (.TW/.TWO) and US
+      2. TWSE/TPEX — fallback for Taiwan stocks when yfinance is rate-limited or empty
+
+    Full history is always requested (see INTERVAL_PERIOD) so MA240 and
+    long-term indicators have enough data.
     """
-    period = INTERVAL_PERIOD.get(interval, "2y")
-    ttl = CACHE_TTL.get(interval, 300)
+    period     = INTERVAL_PERIOD.get(interval, "5y")
+    ttl        = CACHE_TTL.get(interval, 300)
     cache_path = _cache_path(symbol, interval, period)
 
     if not force_refresh:
         cached = _load_cache(cache_path, ttl)
         if cached is not None and not cached.empty:
-            logger.debug(f"Loaded {symbol} from cache")
+            logger.debug("Cache hit for %s", symbol)
             return cached
 
-    # Taiwan stocks have special handling
-    if symbol.upper().endswith(".TW"):
-        logger.info(f"Fetching Taiwan stock {symbol}...")
-        
-        # Step 1: Try TWSE API (most reliable for Taiwan stocks)
-        df = _get_tw_stock_from_twse_api(symbol, days=500)
-        if not df.empty:
-            logger.info(f"Successfully got {symbol} from TWSE API ({len(df)} records)")
-            _save_cache(cache_path, df)
-            return df
-        
-        logger.warning(f"TWSE API failed for {symbol}, trying yfinance...")
-        
-        # Step 2: Fallback to yfinance
-        try:
-            ticker = yf.Ticker(symbol)
-            df = ticker.history(period=period, interval=interval, auto_adjust=True, actions=False)
-            if not df.empty:
-                df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-                df.index = df.index.tz_localize(None)
-                df = df[~df.index.duplicated(keep="last")]
-                df = df.sort_index()
-                logger.info(f"Got {symbol} from yfinance ({len(df)} records)")
-                _save_cache(cache_path, df)
-                return df
-            else:
-                logger.warning(f"yfinance returned empty data for {symbol}")
-        except Exception as e:
-            logger.warning(f"yfinance failed for {symbol}: {e}")
-        
-        # Step 3: Try alternative data sources (could be extended)
-        logger.warning(f"Both TWSE and yfinance failed for {symbol}")
-        return pd.DataFrame()
+    # ── Step 1: yfinance (primary for everything) ─────────────────────────────
+    df = _fetch_yfinance(symbol, period, interval)
+    if not df.empty:
+        _save_cache(cache_path, df)
+        return df
 
-    # For non-Taiwan stocks, use yfinance
-    try:
-        logger.info(f"Fetching {symbol} from yfinance...")
-        ticker = yf.Ticker(symbol)
-        df = ticker.history(period=period, interval=interval, auto_adjust=True, actions=False)
-        if df.empty:
-            logger.warning(f"No data from yfinance for {symbol}")
-            return pd.DataFrame()
-        else:
-            df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-            df.index = df.index.tz_localize(None)
-            df = df[~df.index.duplicated(keep="last")]
-            df = df.sort_index()
-            logger.info(f"Got {symbol} from yfinance ({len(df)} records)")
+    # ── Step 2: TWSE / TPEX fallback (Taiwan stocks only) ────────────────────
+    upper = symbol.upper()
+    if upper.endswith(".TW") or upper.endswith(".TWO"):
+        logger.warning("yfinance empty for %s — trying TWSE/TPEX fallback...", symbol)
+        # 60 months = 5 years; for weekly/monthly use full history
+        months = 60 if interval == "1d" else 120
+        df = _get_tw_stock_from_twse_api(symbol, months=months)
+        if not df.empty:
             _save_cache(cache_path, df)
             return df
-    except Exception as e:
-        logger.error(f"yfinance error for {symbol}: {e}")
-        return pd.DataFrame()
+        logger.error("Both yfinance and TWSE/TPEX failed for %s", symbol)
+
+    return pd.DataFrame()
 
 
 def get_quote(symbol: str) -> dict:
-    """Get latest price and change info. For Taiwan stocks, use TWSE API first."""
-    # For Taiwan stocks, try TWSE API first
-    if symbol.upper().endswith(".TW"):
-        logger.info(f"Fetching quote for Taiwan stock {symbol} from TWSE...")
-        tw_quote = _get_tw_quote_from_twse(symbol)
-        if tw_quote is not None:
-            return tw_quote
-        logger.warning(f"TWSE quote fetch failed for {symbol}, falling back to yfinance...")
-    
-    # Fallback to yfinance
+    """
+    Get latest price and change info.
+    Priority: yfinance fast_info → TWSE/TPEX (Taiwan fallback only).
+    """
+    # ── Step 1: yfinance fast_info (works for TW and US) ─────────────────────
     try:
         t = yf.Ticker(symbol)
         info = t.fast_info
-        price = getattr(info, "last_price", None)
+        price      = getattr(info, "last_price", None)
         prev_close = getattr(info, "previous_close", None)
-        change = (price - prev_close) if price and prev_close else None
+        change     = (price - prev_close) if price and prev_close else None
         change_pct = (change / prev_close * 100) if change and prev_close else None
-        
-        quote = {
-            "price": round(float(price), 4) if price else None,
-            "change": round(float(change), 4) if change else None,
-            "change_pct": round(float(change_pct), 2) if change_pct else None,
-            "volume": int(getattr(info, "regular_market_volume", 0) or 0),
-        }
-        
-        # Filter out None values
-        return {k: v for k, v in quote.items() if v is not None}
-        
+        volume     = int(getattr(info, "regular_market_volume", 0) or 0)
+
+        if price:
+            return {k: v for k, v in {
+                "price":      round(float(price), 4),
+                "change":     round(float(change), 4)     if change     else None,
+                "change_pct": round(float(change_pct), 2) if change_pct else None,
+                "volume":     volume,
+            }.items() if v is not None}
     except Exception as e:
-        logger.warning(f"Quote fetch failed for {symbol}: {e}")
-        return {}
+        logger.warning("yfinance quote failed for %s: %s", symbol, e)
+
+    # ── Step 2: TWSE/TPEX fallback for Taiwan stocks ──────────────────────────
+    upper = symbol.upper()
+    if upper.endswith(".TW") or upper.endswith(".TWO"):
+        logger.info("Trying TWSE fallback quote for %s", symbol)
+        tw_quote = _get_tw_quote_from_twse(symbol)
+        if tw_quote:
+            return tw_quote
+
+    return {}
 
 
 def df_to_ohlcv_list(df: pd.DataFrame) -> list:
