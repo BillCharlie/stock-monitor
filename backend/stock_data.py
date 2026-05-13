@@ -462,38 +462,17 @@ def get_quote(symbol: str) -> dict:
     Get latest price and change info.
     Priority:
       Taiwan stocks (.TW / .TWO):
-        1. Bulk TWSE/TPEX Open Data  — one cached API call covers ALL stocks (fast)
-        2. TWSE MIS real-time API    — per-stock real-time fallback
-        3. TWSE/TPEX monthly data    — reliable fallback (today's date, not May 1)
-        4. yfinance                  — last resort (rate-limited on Railway)
+        1. yfinance                  — fastest when not rate-limited
+        2. Bulk TWSE/TPEX Open Data  — one cached API call covers ALL stocks
+        3. TWSE MIS real-time API    — per-stock real-time fallback
+        4. TWSE/TPEX monthly data    — last-resort reliable fallback
       US / other stocks:
         1. yfinance history(5d)
     """
     upper = symbol.upper()
     is_tw = upper.endswith(".TW") or upper.endswith(".TWO")
 
-    if is_tw:
-        # ── TW Step 1: Bulk TWSE/TPEX (one cached call for all stocks) ───────
-        q = _get_tw_bulk_quote(symbol)
-        if q:
-            return q
-
-        # ── TW Step 2: MIS real-time ─────────────────────────────────────────
-        logger.info("Bulk failed for %s, trying MIS real-time...", symbol)
-        q = _get_tw_mis_quote(symbol)
-        if q:
-            return q
-
-        # ── TW Step 3: TWSE/TPEX monthly (fixed date) ───────────────────────
-        logger.info("MIS failed for %s, trying TWSE monthly...", symbol)
-        q = _get_tw_quote_from_twse(symbol)
-        if q:
-            return q
-
-        # ── TW Step 4: yfinance ──────────────────────────────────────────────
-        logger.info("TWSE failed for %s, trying yfinance...", symbol)
-
-    # US stocks (and TW fallback)
+    # ── Step 1: yfinance (primary for ALL symbols) ────────────────────────────
     try:
         t  = yf.Ticker(symbol)
         df = t.history(period="5d", interval="1d", auto_adjust=True, actions=False)
@@ -513,6 +492,28 @@ def get_quote(symbol: str) -> dict:
         logger.warning("yfinance history empty for %s", symbol)
     except Exception as e:
         logger.warning("yfinance quote failed for %s: %s", symbol, e)
+
+    # TW-only fallbacks ────────────────────────────────────────────────────────
+    if not is_tw:
+        return {}
+
+    # ── TW Step 2: Bulk TWSE/TPEX (one cached call for all stocks) ───────────
+    logger.info("yfinance failed for %s, trying bulk TWSE/TPEX...", symbol)
+    q = _get_tw_bulk_quote(symbol)
+    if q:
+        return q
+
+    # ── TW Step 3: MIS real-time ──────────────────────────────────────────────
+    logger.info("Bulk failed for %s, trying MIS real-time...", symbol)
+    q = _get_tw_mis_quote(symbol)
+    if q:
+        return q
+
+    # ── TW Step 4: TWSE/TPEX monthly (fixed date) ────────────────────────────
+    logger.info("MIS failed for %s, trying TWSE monthly...", symbol)
+    q = _get_tw_quote_from_twse(symbol)
+    if q:
+        return q
 
     return {}
 
