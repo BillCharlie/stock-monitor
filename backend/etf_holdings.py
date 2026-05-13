@@ -25,7 +25,6 @@ Email section:
 """
 from __future__ import annotations
 
-import base64
 import glob
 import io
 import json
@@ -686,15 +685,13 @@ def _parse_date_key(value: str | None) -> datetime | None:
         return None
 
 
-def _render_sector_pie_chart(sectors: list[dict]) -> dict:
-    """Render the pie as a PNG data URL. Labels are placed by the frontend from metadata."""
+def _build_sector_chart_geometry(sectors: list[dict]) -> dict:
+    """Return frontend pie-chart geometry; the browser draws the chart interactively."""
     width, height = 720, 520
     cx, cy, radius = 260, 260, 210
-    bbox = [cx - radius, cy - radius, cx + radius, cy + radius]
     total = sum(_as_float(s.get("total_weight")) for s in sectors)
     if total <= 0:
         return {
-            "image": "",
             "width": width,
             "height": height,
             "center_x": cx,
@@ -703,10 +700,6 @@ def _render_sector_pie_chart(sectors: list[dict]) -> dict:
             "slices": [],
         }
 
-    from PIL import Image, ImageDraw
-
-    image = Image.new("RGBA", (width, height), (10, 10, 10, 0))
-    draw = ImageDraw.Draw(image)
     start = -90.0
     slices = []
 
@@ -717,7 +710,6 @@ def _render_sector_pie_chart(sectors: list[dict]) -> dict:
         span = weight / total * 360.0
         end = start + span
         color = sector.get("color") or _sector_color(sector.get("name", "其他"), index)
-        draw.pieslice(bbox, start=start, end=end, fill=color, outline="#0A0A0A", width=2)
 
         mid = start + span / 2.0
         rad = math.radians(mid)
@@ -736,17 +728,7 @@ def _render_sector_pie_chart(sectors: list[dict]) -> dict:
         })
         start = end
 
-    draw.ellipse(
-        [cx - 72, cy - 72, cx + 72, cy + 72],
-        fill="#080A0D",
-        outline="#24313D",
-        width=2,
-    )
-    out = io.BytesIO()
-    image.save(out, format="PNG", optimize=True)
-    encoded = base64.b64encode(out.getvalue()).decode("ascii")
     return {
-        "image": f"data:image/png;base64,{encoded}",
         "width": width,
         "height": height,
         "center_x": cx,
@@ -880,7 +862,7 @@ def _build_active_etf_sector_payload(
         "etf_summaries": sorted(etf_summaries, key=lambda x: x["code"]),
         "errors": errors,
     }
-    payload["chart"] = _render_sector_pie_chart(sector_list) if include_chart else {}
+    payload["chart"] = _build_sector_chart_geometry(sector_list) if include_chart else {}
     return payload
 
 
@@ -972,7 +954,11 @@ def fetch_etf_sector_summary(force_refresh: bool = False, holdings_refresh: bool
         age = time.time() - os.path.getmtime(summary_cache)
         if age < 10 * 60:
             cached = _load_json(summary_cache)
-            if cached.get("sectors") and cached.get("chart"):
+            if (
+                cached.get("sectors")
+                and cached.get("chart")
+                and "image" not in cached.get("chart", {})
+            ):
                 return cached
 
     all_holdings = fetch_all_etf_holdings(force_refresh=holdings_refresh)

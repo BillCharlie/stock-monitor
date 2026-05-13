@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/stocks.js'
 
 const CHANGE_LABELS = {
@@ -39,25 +39,28 @@ function changeTone(value) {
   return n > 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'
 }
 
+function canvasAngle(degFromTop) {
+  return (Number(degFromTop) - 90) * Math.PI / 180
+}
+
 function findSliceFromPointer(event, chart) {
-  if (!chart?.slices?.length) return ''
+  if (!chart?.slices?.length) return null
   const rect = event.currentTarget.getBoundingClientRect()
   const x = (event.clientX - rect.left) / rect.width * chart.width
   const y = (event.clientY - rect.top) / rect.height * chart.height
   const dx = x - chart.center_x
   const dy = y - chart.center_y
   const distance = Math.sqrt(dx * dx + dy * dy)
-  if (distance > chart.radius + 28) return ''
+  if (distance > chart.radius + 24) return null
 
   const deg = Math.atan2(dy, dx) * 180 / Math.PI
   const relative = (deg + 90 + 360) % 360
-  const hit = chart.slices.find(slice => {
+  return chart.slices.find(slice => {
     const start = Number(slice.start_deg)
     const end = Number(slice.end_deg)
     if (start <= end) return relative >= start && relative < end
     return relative >= start || relative < end
-  })
-  return hit?.name || ''
+  }) || null
 }
 
 function ChangeCard({ label, change }) {
@@ -75,40 +78,124 @@ function ChangeCard({ label, change }) {
   )
 }
 
-function PieChartPng({ summary, activeSector, onSelect }) {
+function InteractivePieChart({ summary, activeSector, onSelect }) {
+  const canvasRef = useRef(null)
   const chart = summary?.chart || {}
   const slices = chart.slices || []
-  const visibleLabels = slices
+  const visibleLabels = slices.filter(s => Number(s.pct) >= 1.4)
+  const activeSlice = slices.find(s => s.name === activeSector)
+  const [bubble, setBubble] = useState(null)
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !chart?.slices?.length) return
+
+    const width = Number(chart.width) || 720
+    const height = Number(chart.height) || 520
+    const cxBase = Number(chart.center_x) || width / 2
+    const cyBase = Number(chart.center_y) || height / 2
+    const radius = Number(chart.radius) || 210
+
+    if (canvas.width !== width) canvas.width = width
+    if (canvas.height !== height) canvas.height = height
+
+    const ctx = canvas.getContext('2d')
+    ctx.clearRect(0, 0, width, height)
+
+    ctx.save()
+    ctx.shadowColor = 'rgba(0,0,0,0.45)'
+    ctx.shadowBlur = 12
+    ctx.shadowOffsetY = 5
+
+    for (const slice of slices) {
+      const isActive = slice.name === activeSector
+      const mid = canvasAngle(slice.mid_deg)
+      const offset = isActive ? 9 : 0
+      const cx = cxBase + Math.cos(mid) * offset
+      const cy = cyBase + Math.sin(mid) * offset
+      let start = canvasAngle(slice.start_deg)
+      let end = canvasAngle(slice.end_deg)
+      if (end <= start) end += Math.PI * 2
+
+      ctx.beginPath()
+      ctx.moveTo(cx, cy)
+      ctx.arc(cx, cy, radius, start, end, false)
+      ctx.closePath()
+      ctx.globalAlpha = activeSector && !isActive ? 0.58 : 1
+      ctx.fillStyle = slice.color || '#607D8B'
+      ctx.fill()
+      ctx.globalAlpha = 1
+      ctx.lineWidth = isActive ? 3 : 1.5
+      ctx.strokeStyle = isActive ? '#FFFFFF' : '#0A0A0A'
+      ctx.stroke()
+    }
+
+    ctx.restore()
+
+    ctx.beginPath()
+    ctx.arc(cxBase, cyBase, 76, 0, Math.PI * 2)
+    ctx.fillStyle = '#080A0D'
+    ctx.fill()
+    ctx.lineWidth = 1.5
+    ctx.strokeStyle = '#24313D'
+    ctx.stroke()
+
+    ctx.fillStyle = '#E5E7EB'
+    ctx.font = '600 18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText('產業', cxBase, cyBase - 7)
+    ctx.fillStyle = '#64748B'
+    ctx.font = '12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    ctx.fillText('總配置', cxBase, cyBase + 13)
+  }, [activeSector, chart, slices])
+
+  useEffect(() => {
+    if (!activeSlice) return
+    setBubble(prev => {
+      if (prev?.name === activeSlice.name) return prev
+      return {
+        name: activeSlice.name,
+        pct: activeSlice.pct,
+        color: activeSlice.color,
+        x: Number(activeSlice.label_x) * 100,
+        y: Number(activeSlice.label_y) * 100,
+      }
+    })
+  }, [activeSlice])
 
   const handleClick = (event) => {
-    const name = findSliceFromPointer(event, chart)
-    if (name) onSelect(name)
+    const slice = findSliceFromPointer(event, chart)
+    if (!slice) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    onSelect(slice.name)
+    setBubble({
+      name: slice.name,
+      pct: slice.pct,
+      color: slice.color,
+      x: (event.clientX - rect.left) / rect.width * 100,
+      y: (event.clientY - rect.top) / rect.height * 100,
+    })
   }
 
   return (
-    <div className="relative w-full max-w-[720px] mx-auto">
+    <div className="relative mx-auto w-full max-w-[720px]">
       <div
         className="relative aspect-[720/520] select-none"
         onClick={handleClick}
-        role="img"
-        aria-label="主動式ETF產業配置總饼圖"
+        role="application"
+        aria-label="主動式ETF產業配置互動饼圖"
       >
-        {chart.image ? (
-          <img
-            src={chart.image}
-            alt="主動式ETF產業配置總饼圖"
-            className="absolute inset-0 h-full w-full object-contain"
-            draggable={false}
+        {slices.length ? (
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 h-full w-full cursor-pointer"
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-600">
             尚無可顯示的產業占比
           </div>
         )}
-        <div className="absolute left-[36.1%] top-1/2 -translate-x-1/2 -translate-y-1/2 text-center pointer-events-none">
-          <div className="text-sm font-semibold text-white">產業</div>
-          <div className="text-[10px] text-gray-600">總配置</div>
-        </div>
+
         {visibleLabels.map(slice => (
           <button
             key={slice.name}
@@ -116,11 +203,18 @@ function PieChartPng({ summary, activeSector, onSelect }) {
             onClick={(event) => {
               event.stopPropagation()
               onSelect(slice.name)
+              setBubble({
+                name: slice.name,
+                pct: slice.pct,
+                color: slice.color,
+                x: Number(slice.label_x) * 100,
+                y: Number(slice.label_y) * 100,
+              })
             }}
-            className={`absolute max-w-[104px] -translate-x-1/2 -translate-y-1/2 rounded border px-1.5 py-0.5 text-[9px] leading-tight shadow-md transition-colors ${
+            className={`absolute max-w-[108px] -translate-x-1/2 -translate-y-1/2 rounded border px-1.5 py-0.5 text-[9px] leading-tight shadow-md transition-colors ${
               activeSector === slice.name
                 ? 'border-white bg-[#111820] text-white'
-                : 'border-[#263340] bg-[#081018]/90 text-gray-200 hover:border-gray-300'
+                : 'border-[#263340] bg-[#081018]/85 text-gray-200 hover:border-gray-300'
             }`}
             style={{
               left: `${Number(slice.label_x) * 100}%`,
@@ -132,13 +226,35 @@ function PieChartPng({ summary, activeSector, onSelect }) {
             <span className="block font-mono text-[9px]" style={{ color: slice.color }}>{fmt(slice.pct, 1)}%</span>
           </button>
         ))}
+
+        {bubble && (
+          <div
+            className="pointer-events-none absolute z-20 min-w-[132px] -translate-x-1/2 -translate-y-[115%] rounded border border-white/40 bg-[#060A0E]/95 px-3 py-2 text-center shadow-xl"
+            style={{ left: `${bubble.x}%`, top: `${bubble.y}%` }}
+          >
+            <div className="truncate text-xs font-semibold text-white">{bubble.name}</div>
+            <div className="mt-0.5 font-mono text-[11px]" style={{ color: bubble.color }}>
+              {fmt(bubble.pct, 2)}%
+            </div>
+          </div>
+        )}
       </div>
+
       <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-4">
         {slices.map(slice => (
           <button
             key={slice.name}
             type="button"
-            onClick={() => onSelect(slice.name)}
+            onClick={() => {
+              onSelect(slice.name)
+              setBubble({
+                name: slice.name,
+                pct: slice.pct,
+                color: slice.color,
+                x: Number(slice.label_x) * 100,
+                y: Number(slice.label_y) * 100,
+              })
+            }}
             className={`flex items-center gap-1.5 border px-2 py-1 text-left text-[10px] ${
               activeSector === slice.name
                 ? 'border-cyan-400 bg-[#10202A] text-white'
@@ -198,7 +314,7 @@ export default function ActiveEtfPanel() {
         <div className="min-w-0">
           <div className="text-sm font-semibold text-white">主動式ETF產業總配置</div>
           <div className="text-[10px] text-gray-600">
-            Python 產生饼圖，股票型主動式ETF等權彙整
+            前端 Canvas 互動饼圖，股票型主動式ETF等權彙整
             {summary?.date ? `，最新持股日 ${summary.date}` : ''}
           </div>
         </div>
@@ -227,7 +343,7 @@ export default function ActiveEtfPanel() {
         <div className="flex-1 min-h-0 overflow-y-auto">
           <div className="grid grid-cols-1 gap-4 border-b border-[#1A1A1A] bg-[#080A0D] p-4 xl:grid-cols-[minmax(420px,620px)_1fr]">
             <div className="min-w-0">
-              <PieChartPng summary={summary} activeSector={activeSector} onSelect={setActiveSector} />
+              <InteractivePieChart summary={summary} activeSector={activeSector} onSelect={setActiveSector} />
             </div>
 
             <div className="min-w-0 border border-[#1A1A1A] bg-[#0B0D0F]">
