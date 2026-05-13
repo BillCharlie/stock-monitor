@@ -47,6 +47,72 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 HOLDINGS_CACHE_TTL = 4 * 3600    # 4 hours — skip re-fetch if cache is fresh
 ALL_CACHE_TTL      = 3 * 3600    # 3 hours — combined all-ETF snapshot
+STOCK_MASTER_CACHE_TTL = 24 * 3600
+
+TWSE_COMPANY_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
+TPEX_COMPANY_URL = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+
+_TW_INDUSTRY_SECTORS = {
+    "01": "水泥",
+    "02": "食品",
+    "03": "化工/塑化",
+    "04": "紡織",
+    "05": "電機機械",
+    "06": "電器電纜",
+    "07": "化工/塑化",
+    "08": "傳產",
+    "09": "傳產",
+    "10": "鋼鐵",
+    "11": "傳產",
+    "12": "汽車",
+    "14": "建設",
+    "15": "航運",
+    "16": "觀光餐旅",
+    "17": "金融",
+    "18": "零售",
+    "20": "傳產",
+    "21": "化工/塑化",
+    "22": "生技醫療",
+    "23": "能源",
+    "24": "半導體",
+    "25": "科技系統廠",
+    "26": "光學",
+    "27": "通信網路",
+    "28": "電子零組件",
+    "29": "電子通路",
+    "30": "資訊服務",
+    "31": "其他電子",
+    "32": "文創",
+    "33": "農業科技",
+    "34": "電子商務",
+    "35": "太陽能/綠能",
+    "36": "AI與雲端",
+    "37": "運動休閒",
+    "38": "居家生活",
+}
+
+_WATCHLIST_THEME_SECTORS = {"TSMC相關股", "主動式ETF"}
+
+_US_STOCKS: dict[str, tuple[str, str]] = {
+    "AAPL": ("Apple", "科技系統廠"),
+    "AMZN": ("Amazon", "AI與雲端"),
+    "AMD": ("AMD", "半導體"),
+    "ARM": ("Arm", "半導體"),
+    "ASML": ("ASML", "半導體"),
+    "AVGO": ("Broadcom", "半導體"),
+    "GOOG": ("Alphabet", "AI與雲端"),
+    "GOOGL": ("Alphabet", "AI與雲端"),
+    "META": ("Meta", "AI與雲端"),
+    "MSFT": ("Microsoft", "AI與雲端"),
+    "MU": ("Micron", "半導體"),
+    "NFLX": ("Netflix", "AI與雲端"),
+    "NVDA": ("NVIDIA", "半導體"),
+    "ORCL": ("Oracle", "AI與雲端"),
+    "PLTR": ("Palantir", "AI與雲端"),
+    "QCOM": ("Qualcomm", "半導體"),
+    "TSLA": ("Tesla", "汽車"),
+    "TSM": ("TSMC ADR", "半導體"),
+}
 
 # ── Master list ───────────────────────────────────────────────────────────────
 ACTIVE_ETFS: dict[str, str] = {
@@ -107,26 +173,78 @@ def _clean_number(v) -> float | None:
         return None
 
 
+def _looks_latin1_mojibake(value: str) -> bool:
+    """True for UTF-8 Chinese text that was accidentally decoded as latin-1."""
+    if not value:
+        return False
+    suspicious = sum(
+        1
+        for ch in value
+        if "\u0080" <= ch <= "\u00ff" or ch in {"å", "æ", "ç", "è", "é"}
+    )
+    return suspicious >= 2
+
+
+def _repair_mojibake(value: str) -> str:
+    """Repair the common MoneyDJ mojibake shape: 'å°ç©é»' → '台積電'."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if _looks_latin1_mojibake(text):
+        try:
+            fixed = text.encode("latin1").decode("utf-8")
+            if fixed:
+                return fixed.strip()
+        except UnicodeError:
+            pass
+    return text
+
+
+def _normalise_code(code: str) -> str:
+    return re.sub(r"\.(TW|TWO|US|HK)$", "", str(code or "").strip().upper())
+
+
 def _extract_stock_code(raw: str) -> str:
     """
     Extract a 4-6 digit TW stock code from various MoneyDJ column formats:
       - "2330"                   → "2330"
       - "台積電(2330)"            → "2330"
       - "2330 台積電"             → "2330"
+      - "台積電(2330.TW)"         → "2330"
+      - "NVIDIA CORP(NVDA.US)"    → "NVDA"
     """
-    raw = str(raw).strip()
+    raw = _repair_mojibake(raw)
+    raw_u = raw.upper()
+
     # Pure digit/letter code (e.g. "2330", "00940")
-    if re.fullmatch(r"[0-9A-Z]{4,8}", raw):
-        return raw
-    # Embedded in parentheses: "台積電(2330)"
-    m = re.search(r"\(([0-9A-Z]{4,8})\)", raw)
+    if re.fullmatch(r"[0-9A-Z]{2,8}(?:\.(?:TW|TWO|US|HK))?", raw_u):
+        return _normalise_code(raw_u)
+
+    # Embedded in parentheses: "台積電(2330.TW)" / "NVIDIA(NVDA.US)"
+    m = re.search(r"\(([0-9A-Z]{1,8})(?:\.(?:TW|TWO|US|HK))?\)", raw_u)
+    if m:
+        return _normalise_code(m.group(1))
+
+    # Leading digits followed by space: "2330 台積電"
+    m = re.match(r"^([0-9]{4,8})\s", raw_u)
     if m:
         return m.group(1)
-    # Leading digits followed by space: "2330 台積電"
-    m = re.match(r"^([0-9]{4,8})\s", raw)
+
+    # Any TW-style stock code in the value. This recovers cached mojibake rows.
+    m = re.search(r"\b([0-9]{4,6}[A-Z]?)(?:\.(?:TW|TWO))?\b", raw_u)
     if m:
         return m.group(1)
     return ""
+
+
+def _strip_code_from_name(raw_name: str, code: str = "") -> str:
+    """Remove display suffixes like '(2330.TW)' while keeping the separate code field."""
+    name = _repair_mojibake(raw_name)
+    name = re.sub(r"\s*\(([0-9A-Z]{1,8})(?:\.(?:TW|TWO|US|HK))?\)\s*", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"^([0-9]{4,8}[A-Z]?)(?:\.(?:TW|TWO))?\s+", "", name, flags=re.IGNORECASE)
+    if code:
+        name = re.sub(rf"\b{re.escape(code)}(?:\.(?:TW|TWO|US|HK))?\b", "", name, flags=re.IGNORECASE)
+    return name.strip(" -*　")
 
 
 def _find_holdings_table(tables: list[pd.DataFrame]) -> pd.DataFrame | None:
@@ -193,14 +311,13 @@ def _parse_holdings_df(df: pd.DataFrame) -> list[dict]:
 
     holdings = []
     for _, row in df.iterrows():
-        raw_code = str(row[code_col]).strip() if code_col else ""
-        raw_name = str(row[name_col]).strip() if name_col else ""
+        raw_code = _repair_mojibake(str(row[code_col]).strip()) if code_col else ""
+        raw_name = _repair_mojibake(str(row[name_col]).strip()) if name_col else ""
 
-        # If code column absent, try extracting from name
-        stock_code = _extract_stock_code(raw_code) if raw_code else _extract_stock_code(raw_name)
+        stock_code = _extract_stock_code(raw_code) or _extract_stock_code(raw_name)
 
-        # Strip embedded code from name if present
-        stock_name = re.sub(r"\s*\([0-9A-Z]{4,8}\)\s*", "", raw_name).strip() or raw_name
+        # Strip embedded code from name if present, but preserve the separate stock_code
+        stock_name = _strip_code_from_name(raw_name, stock_code) or _strip_code_from_name(raw_code, stock_code) or raw_name
 
         weight = _clean_number(row[weight_col]) if weight_col else None
         shares = None
@@ -259,7 +376,7 @@ _EXTRA_STOCKS: dict[str, tuple[str, str]] = {
     "2912": ("統一超商",    "零售"),   "5903": ("全家便利",    "零售"),
     "2915": ("潤泰全",      "零售"),
     "4174": ("浩鼎生技",    "生技醫療"), "6446": ("藥華藥",    "生技醫療"),
-    "3481": ("颀邦科技",    "半導體"), "3008": ("大立光",      "光學"),
+    "3481": ("頎邦科技",    "半導體"), "3008": ("大立光",      "光學"),
     "2049": ("上銀科技",    "機械"),   "1590": ("亞德客-KY",  "機械"),
     "6213": ("聯茂電子",    "PCB"),    "2474": ("可成科技",   "科技系統廠"),
     "2633": ("台灣高鐵",    "交通"),   "9933": ("中鼎工程",   "建設"),
@@ -272,6 +389,98 @@ _EXTRA_STOCKS: dict[str, tuple[str, str]] = {
 
 _name_map_cache:   dict | None = None
 _sector_map_cache: dict | None = None
+
+
+def _stock_master_cache_path() -> str:
+    return os.path.join(CACHE_DIR, "tw_stock_master.json")
+
+
+def _load_stock_master_cache() -> dict:
+    path = _stock_master_cache_path()
+    if not os.path.exists(path):
+        return {}
+    if time.time() - os.path.getmtime(path) > STOCK_MASTER_CACHE_TTL:
+        return {}
+    return _load_json(path)
+
+
+def _fetch_json(url: str):
+    resp = requests.get(url, headers=_HEADERS, timeout=20, verify=False)
+    resp.raise_for_status()
+    if resp.encoding and resp.encoding.lower() == "iso-8859-1":
+        resp.encoding = resp.apparent_encoding or "utf-8"
+    return resp.json()
+
+
+def _normalise_tw_industry(raw: str) -> str:
+    code = str(raw or "").strip()
+    if not code:
+        return "其他"
+    if code.isdigit():
+        code = code.zfill(2)
+    return _TW_INDUSTRY_SECTORS.get(code, "其他")
+
+
+def _build_official_stock_maps() -> tuple[dict[str, str], dict[str, str]]:
+    """Fetch TWSE/TPEx company masters so ETF holdings can resolve names by code."""
+    cached = _load_stock_master_cache()
+    if cached.get("names") and cached.get("sectors"):
+        return cached["names"], cached["sectors"]
+
+    names: dict[str, str] = {}
+    sectors: dict[str, str] = {}
+    sources = (
+        (
+            TWSE_COMPANY_URL,
+            "公司代號",
+            "公司簡稱",
+            "公司名稱",
+            "產業別",
+        ),
+        (
+            TPEX_COMPANY_URL,
+            "SecuritiesCompanyCode",
+            "CompanyAbbreviation",
+            "CompanyName",
+            "SecuritiesIndustryCode",
+        ),
+    )
+
+    for url, code_key, short_key, full_key, industry_key in sources:
+        try:
+            for row in _fetch_json(url):
+                code = _normalise_code(row.get(code_key, ""))
+                if not code:
+                    continue
+                name = str(row.get(short_key) or row.get(full_key) or "").strip()
+                if name:
+                    names[code] = name
+                sectors[code] = _normalise_tw_industry(row.get(industry_key, ""))
+        except Exception as e:
+            logger.warning("Official stock master fetch failed %s: %s", url, e)
+
+    if names:
+        _save_json(_stock_master_cache_path(), {
+            "fetched_at": datetime.now().isoformat(),
+            "names": names,
+            "sectors": sectors,
+        })
+    return names, sectors
+
+
+def _has_cjk(value: str) -> bool:
+    return bool(re.search(r"[一-鿿]", value or ""))
+
+
+def _bad_stock_name(name: str, code: str = "") -> bool:
+    clean = _strip_code_from_name(name, code)
+    if not clean:
+        return True
+    if _looks_latin1_mojibake(name):
+        return True
+    if code and _normalise_code(clean) == code:
+        return True
+    return not _has_cjk(clean) and not re.search(r"[A-Za-z]", clean)
 
 
 def _build_stock_maps() -> tuple[dict[str, str], dict[str, str]]:
@@ -316,6 +525,22 @@ def _build_stock_maps() -> tuple[dict[str, str], dict[str, str]]:
         name_map.setdefault(code, name)
         sector_map.setdefault(code, sector)
 
+    official_names, official_sectors = _build_official_stock_maps()
+    for code, name in official_names.items():
+        if code not in name_map or _bad_stock_name(name_map.get(code, ""), code):
+            name_map[code] = name
+    for code, sector in official_sectors.items():
+        if (
+            code not in sector_map
+            or sector_map.get(code) in _WATCHLIST_THEME_SECTORS
+            or sector_map.get(code) == "其他"
+        ):
+            sector_map[code] = sector
+
+    for code, (name, sector) in _US_STOCKS.items():
+        name_map.setdefault(code, name)
+        sector_map.setdefault(code, sector)
+
     return name_map, sector_map
 
 
@@ -336,14 +561,51 @@ def _enrich_holdings(holdings: list[dict]) -> list[dict]:
     nm, sm = _get_stock_maps()
     enriched = []
     for h in holdings:
-        code = h.get("stock_code", "")
-        name = h.get("stock_name", "")
-        # If name has no Chinese characters, look up the proper name
-        if code and not re.search(r"[一-鿿]", name):
-            name = nm.get(code, name)
+        raw_name = h.get("stock_name", "")
+        code = _normalise_code(h.get("stock_code", "")) or _extract_stock_code(raw_name)
+        repaired_name = _strip_code_from_name(raw_name, code)
+        if code and _bad_stock_name(repaired_name, code):
+            repaired_name = nm.get(code, repaired_name)
+        elif code and code in nm and _looks_latin1_mojibake(raw_name):
+            repaired_name = nm[code]
+
         sector = sm.get(code, "其他") if code else "其他"
-        enriched.append({**h, "stock_name": name, "sector": sector})
+        enriched.append({
+            **h,
+            "stock_code": code,
+            "stock_name": repaired_name or nm.get(code, code),
+            "sector": sector,
+        })
     return enriched
+
+
+def _build_sector_breakdown(holdings: list[dict]) -> dict[str, dict]:
+    sector_bd: dict[str, dict] = {}
+    for h in holdings:
+        sec = h.get("sector", "其他")
+        if sec not in sector_bd:
+            sector_bd[sec] = {"count": 0, "total_weight": 0.0}
+        sector_bd[sec]["count"] += 1
+        sector_bd[sec]["total_weight"] = round(
+            sector_bd[sec]["total_weight"] + (h.get("weight_pct") or 0), 4
+        )
+    return dict(sorted(sector_bd.items(), key=lambda x: -x[1]["total_weight"]))
+
+
+def _refresh_result_enrichment(result: dict) -> dict:
+    holdings = _enrich_holdings(result.get("holdings", []))
+    result["holdings"] = holdings
+    if holdings:
+        weighted = [h for h in holdings if h.get("weight_pct") is not None]
+        result["top10_weight"] = round(sum(h["weight_pct"] for h in weighted[:10]), 2) if weighted else None
+        result["total_holdings"] = len(holdings)
+        result["sector_breakdown"] = _build_sector_breakdown(holdings)
+    code = _normalise_code(result.get("code", ""))
+    if code in ACTIVE_ETFS:
+        result["code"] = code
+        result["name"] = ACTIVE_ETFS[code]
+        result["type"] = "bond" if code.endswith("D") else "stock"
+    return result
 
 
 # ── MoneyDJ scraper (primary) ─────────────────────────────────────────────────
@@ -365,6 +627,8 @@ def _scrape_moneydj(code: str) -> tuple[str, list[dict]]:
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=20, verify=False)
         resp.raise_for_status()
+        if resp.encoding and resp.encoding.lower() == "iso-8859-1":
+            resp.encoding = resp.apparent_encoding or "utf-8"
         html = resp.text
     except Exception as e:
         logger.warning("MoneyDJ fetch failed %s: %s", code, e)
@@ -411,6 +675,8 @@ def _scrape_etfinfo(code: str) -> tuple[str, list[dict]]:
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=20, verify=False)
         resp.raise_for_status()
+        if resp.encoding and resp.encoding.lower() == "iso-8859-1":
+            resp.encoding = resp.apparent_encoding or "utf-8"
         html = resp.text
     except Exception as e:
         logger.warning("etfinfo fetch failed %s: %s", code, e)
@@ -547,7 +813,7 @@ def fetch_etf_holdings(etf_code: str, force_refresh: bool = False) -> dict:
             if cached.get("holdings") or cached.get("error"):
                 if cached.get("holdings"):
                     # Re-enrich on every cache-read so sector/name fixes apply immediately
-                    cached["holdings"] = _enrich_holdings(cached["holdings"])
+                    cached = _refresh_result_enrichment(cached)
                 return cached
 
     name     = ACTIVE_ETFS.get(code_upper, code_upper)
@@ -582,18 +848,7 @@ def fetch_etf_holdings(etf_code: str, force_refresh: bool = False) -> dict:
     top10_w  = round(sum(h["weight_pct"] for h in weighted[:10]), 2) if weighted else None
 
     # ── Sector breakdown ──────────────────────────────────────────────────────
-    sector_bd: dict[str, dict] = {}
-    for h in holdings:
-        sec = h.get("sector", "其他")
-        if sec not in sector_bd:
-            sector_bd[sec] = {"count": 0, "total_weight": 0.0}
-        sector_bd[sec]["count"] += 1
-        sector_bd[sec]["total_weight"] = round(
-            sector_bd[sec]["total_weight"] + (h.get("weight_pct") or 0), 4
-        )
-    sector_breakdown = dict(
-        sorted(sector_bd.items(), key=lambda x: -x[1]["total_weight"])
-    )
+    sector_breakdown = _build_sector_breakdown(holdings)
 
     result = {
         "code":             code_upper,
@@ -641,7 +896,7 @@ def fetch_all_etf_holdings(force_refresh: bool = False) -> dict[str, dict]:
                 # Re-enrich on read so sector/name fixes apply to cached data
                 for etf_data in cached_all.values():
                     if etf_data.get("holdings"):
-                        etf_data["holdings"] = _enrich_holdings(etf_data["holdings"])
+                        _refresh_result_enrichment(etf_data)
                 return cached_all
             except Exception:
                 pass
