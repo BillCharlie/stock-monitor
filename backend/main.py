@@ -651,52 +651,55 @@ def test_email(to: Optional[str] = Query(None)):
 
 @app.get("/api/test/quotes")
 def test_quotes(symbols: str = Query(..., description="逗號分隔代號，如 5347.TW,5274.TW")):
-    """Batch quote test — verbose errors per symbol. No auth needed."""
-    import yfinance as yf
+    """
+    Batch quote test — calls the real get_quote() for each symbol.
+    Shows price if successful, or the source that was tried.
+    No auth needed.
+    """
     import requests as _req
-    from datetime import datetime, timedelta
+    from stock_data import get_quote, _get_tw_mis_quote
 
     results = {}
     for raw in symbols.split(","):
         s = raw.strip()
         if not s:
             continue
-        detail = {}
 
-        # ── yfinance probe ────────────────────────────────────────────────────
+        # Test MIS directly so we can see its raw response
+        mis_detail = "N/A"
+        if s.upper().endswith(".TW") or s.upper().endswith(".TWO"):
+            raw_code = s.split(".")[0]
+            for ex in ["tse", "otc"]:
+                try:
+                    r = _req.get(
+                        "https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
+                        params={"ex_ch": f"{ex}_{raw_code}.tw", "json": "1", "delay": "0"},
+                        headers={"User-Agent": "Mozilla/5.0",
+                                 "Referer": "https://mis.twse.com.tw/"},
+                        timeout=8, verify=False,
+                    )
+                    items = r.json().get("msgArray", [])
+                    if items:
+                        item = items[0]
+                        z = item.get("z", "-")
+                        y = item.get("y", "-")
+                        mis_detail = f"✅ {ex}: z={z} y={y}"
+                        break
+                    else:
+                        mis_detail = f"❌ {ex}: msgArray empty"
+                except Exception as e:
+                    mis_detail = f"❌ {ex}: {e}"
+
+        # Call the real get_quote
         try:
-            t  = yf.Ticker(s)
-            df = t.history(period="5d", interval="1d", auto_adjust=True, actions=False)
-            if not df.empty:
-                detail["yf"] = f"✅ {len(df)} rows, last close={float(df['Close'].iloc[-1]):.2f}"
-            else:
-                detail["yf"] = "❌ empty DataFrame"
+            q = get_quote(s)
+            results[s] = {
+                "quote": q if q else "❌ 無資料",
+                "mis_probe": mis_detail,
+            }
         except Exception as e:
-            detail["yf"] = f"❌ {type(e).__name__}: {e}"
+            results[s] = {"quote": f"❌ exception: {e}", "mis_probe": mis_detail}
 
-        # ── TWSE probe (only for .TW) ─────────────────────────────────────────
-        if s.upper().endswith(".TW"):
-            code = s.split(".")[0]
-            date_str = datetime.now().strftime("%Y%m%d")  # today, not first-of-month
-            try:
-                r = _req.get(
-                    "https://www.twse.com.tw/exchangeReport/STOCK_DAY",
-                    params={"response": "json", "date": date_str, "stockNo": code},
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    timeout=10, verify=False,
-                )
-                data = r.json()
-                stat = data.get("stat")
-                rows = data.get("data", [])
-                if rows:
-                    last = rows[-1]
-                    detail["twse"] = f"✅ stat={stat}, {len(rows)} rows, last close={last[6]}"
-                else:
-                    detail["twse"] = f"❌ stat={stat}, no data rows"
-            except Exception as e:
-                detail["twse"] = f"❌ {type(e).__name__}: {e}"
-
-        results[s] = detail
     return results
 
 
