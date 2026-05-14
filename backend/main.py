@@ -39,7 +39,6 @@ from etf_holdings import (
     fetch_etf_holdings,
     fetch_all_etf_holdings,
     fetch_etf_sector_summary,
-    build_etf_email_section,
     ACTIVE_ETFS,
 )
 from realtime_data import get_realtime_quote, get_intraday_kline, validate_symbol
@@ -148,16 +147,6 @@ def _generate_and_deliver(trigger: str = "scheduler"):
         html = _build_fallback_html(_daily_report)
         _gpt_report_html = html
         logger.info("Using fallback HTML report (GPT not available)")
-
-    # Append active ETF holdings section
-    try:
-        holdings = _etf_holdings if _etf_holdings else fetch_all_etf_holdings()
-        if holdings:
-            etf_section = build_etf_email_section(holdings)
-            # Insert before closing </div> of content block (or just append)
-            html = html + etf_section
-    except Exception as e:
-        logger.warning("ETF email section failed: %s", e)
 
     pdf_path = save_report_pdf(html, _daily_report)
     send_daily_report(html, _daily_report, pdf_path=pdf_path)
@@ -666,8 +655,7 @@ def trigger_analysis():
 @app.post("/api/analysis/gpt-report", dependencies=[Depends(_require_report_auth)])
 def trigger_gpt_report():
     """Manually trigger GPT report → save PDF locally → send email with PDF attachment."""
-    if not _daily_report:
-        _run_daily_analysis()
+    _run_daily_analysis()
     if not _daily_report.get("trump_news"):
         _daily_report["trump_news"] = fetch_trump_news()
 

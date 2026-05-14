@@ -16,6 +16,7 @@ export default function App() {
   const [generating, setGenerating] = useState(false)
   const [reportMsg, setReportMsg] = useState('')
   const [hasPdf, setHasPdf] = useState(false)
+  const [reportVersion, setReportVersion] = useState(0)
   const [showKeys, setShowKeys] = useState(false)
   const [sidebarW, setSidebarW] = useState(224)
   const resizingRef = useRef(false)
@@ -69,6 +70,7 @@ export default function App() {
       const pdf = res.pdf_saved  ? ' PDF已儲存' : ''
       setReportMsg(`報告生成完成${ok}${pdf}`)
       setHasPdf(!!res.pdf_saved)
+      setReportVersion(v => v + 1)
       setActiveTab('report')
     } catch (e) {
       if (e.message.includes('401') || e.message.includes('密鑰')) {
@@ -197,7 +199,7 @@ export default function App() {
               <AnalysisPanel symbol={selected.symbol} stockName={selected.name} mode="single" />
             )}
             {activeTab === 'report' && (
-              <AnalysisPanel symbol={selected.symbol} stockName={selected.name} mode="report" />
+              <AnalysisPanel symbol={selected.symbol} stockName={selected.name} mode="report" reportVersion={reportVersion} />
             )}
             {activeTab === 'news' && (
               <NewsPanel onNeedKey={() => setShowKeys(true)} />

@@ -1028,20 +1028,21 @@ function SingleAnalysis({ symbol, stockName }) {
   )
 }
 
-function DailyReport() {
+function DailyReport({ refreshToken = 0 }) {
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
   const load = () => {
     setLoading(true)
+    setError(null)
     api.getDailyReport()
       .then(setReport)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [refreshToken])
 
   if (loading) return <div className="p-4 text-gray-400">載入報告中...</div>
   if (error) return (
@@ -1127,9 +1128,6 @@ function DailyReport() {
 
       <TrumpNewsReportSummary data={report.trump_news} />
 
-      {/* Active ETF sector pie-chart overview */}
-      <EtfSectorOverview />
-
       {/* All stock summaries */}
       {report.all_results && (
         <div>
@@ -1161,7 +1159,7 @@ function DailyReport() {
   )
 }
 
-export default function AnalysisPanel({ symbol, stockName, mode }) {
-  if (mode === 'report') return <DailyReport />
+export default function AnalysisPanel({ symbol, stockName, mode, reportVersion }) {
+  if (mode === 'report') return <DailyReport refreshToken={reportVersion} />
   return <SingleAnalysis symbol={symbol} stockName={stockName} />
 }

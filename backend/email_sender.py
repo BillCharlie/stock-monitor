@@ -330,6 +330,7 @@ def send_daily_report(html_content: str, daily_report: dict, pdf_path: str | Non
     """
     sender   = os.getenv("GMAIL_SENDER", "").strip()
     password = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
 
     # Support multiple recipients via REPORT_RECIPIENT and REPORT_RECIPIENT_2..N
     recipients: list[str] = []
@@ -340,8 +341,9 @@ def send_daily_report(html_content: str, daily_report: dict, pdf_path: str | Non
     if not recipients:
         recipients = ["chenbill718@gmail.com"]
 
-    if not sender or not password or password == "xxxxxxxxxxxxxxxx":
-        logger.warning("Gmail credentials not configured in .env — email skipped")
+    smtp_configured = bool(sender) and bool(password) and password != "xxxxxxxxxxxxxxxx"
+    if not resend_key and not smtp_configured:
+        logger.warning("No RESEND_API_KEY or Gmail credentials configured in .env — email skipped")
         return False
 
     date_str     = daily_report.get("date", datetime.now().strftime("%Y-%m-%d"))
@@ -355,6 +357,13 @@ def send_daily_report(html_content: str, daily_report: dict, pdf_path: str | Non
     )
 
     full_html = _wrap_email_template(html_content, date_str, generated_at)
+
+    if resend_key:
+        if _send_via_resend(resend_key, recipients, subject, full_html, pdf_path):
+            return True
+        if not smtp_configured:
+            return False
+        logger.warning("Resend failed; falling back to Gmail SMTP")
 
     msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
@@ -375,11 +384,6 @@ def send_daily_report(html_content: str, daily_report: dict, pdf_path: str | Non
         attachment.add_header("Content-Disposition", "attachment", filename=pdf_filename)
         msg.attach(attachment)
         logger.info(f"PDF attached: {pdf_filename}")
-
-    # ── prefer Resend HTTP API (works on Railway / cloud) ─────────────────────
-    resend_key = os.getenv("RESEND_API_KEY", "").strip()
-    if resend_key:
-        return _send_via_resend(resend_key, recipients, subject, full_html, pdf_path)
 
     # ── fallback: Gmail SMTP (local dev only) ─────────────────────────────────
     return _smtp_send(sender, password, recipients, msg)
