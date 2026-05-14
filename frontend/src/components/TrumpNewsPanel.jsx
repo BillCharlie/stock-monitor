@@ -72,13 +72,25 @@ function getSectionItems(sections) {
   return items
 }
 
+function getItemTime(item) {
+  const value = item?.published_at || item?.pub_date
+  if (!value) return 0
+  const time = new Date(value).getTime()
+  return Number.isNaN(time) ? 0 : time
+}
+
+function sortNewestFirst(items) {
+  return [...items].sort((a, b) => getItemTime(b) - getItemTime(a))
+}
+
 function ImpactSummary({ impact, selectedThemeId, onSelectTheme, filteredCount, onClearTheme }) {
   const themes = impact?.themes || []
   const sectors = impact?.sectors || []
   const selectedTheme = themes.find(theme => String(theme.id) === String(selectedThemeId))
+  const [expanded, setExpanded] = useState(false)
 
   return (
-    <div className="flex-shrink-0 border-b border-[#1A1A1A] bg-[#101214] px-3 py-2">
+    <div className="border-b border-[#1A1A1A] bg-[#101214] px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[11px] font-semibold text-[#40C4FF]">政策訊號</span>
         <span className="text-[10px] text-gray-300">{impact?.overall || '目前未偵測到明確市場板塊衝擊訊號'}</span>
@@ -96,9 +108,16 @@ function ImpactSummary({ impact, selectedThemeId, onSelectTheme, filteredCount, 
             清除
           </button>
         )}
+        <button
+          type="button"
+          onClick={() => setExpanded(value => !value)}
+          className="ml-auto text-[9px] text-gray-500 hover:text-white border border-[#2A2A2A] rounded px-1.5 py-0.5"
+        >
+          {expanded ? '收合訊號' : '展開訊號'}
+        </button>
       </div>
 
-      {themes.length > 0 && (
+      {expanded && themes.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-1.5 mt-2">
           {themes.slice(0, 6).map(theme => {
             const selected = String(theme.id) === String(selectedThemeId)
@@ -128,7 +147,7 @@ function ImpactSummary({ impact, selectedThemeId, onSelectTheme, filteredCount, 
         </div>
       )}
 
-      {sectors.length > 0 && (
+      {expanded && sectors.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-2">
           {sectors.slice(0, 8).map(sector => (
             <span key={sector.sector} className="text-[9px] px-1.5 py-0.5 rounded bg-[#172018] text-[#8BC34A] border border-[#263A25]">
@@ -227,7 +246,10 @@ export default function TrumpNewsPanel() {
     if (!selectedTheme) return []
     return allItems.filter(item => itemMatchesPolicyTheme(item, selectedTheme))
   }, [allItems, selectedTheme])
-  const visibleItems = selectedTheme ? filteredItems : activeItems
+  const visibleItems = useMemo(
+    () => sortNewestFirst(selectedTheme ? filteredItems : activeItems),
+    [activeItems, filteredItems, selectedTheme],
+  )
   const counts = useMemo(() => {
     const out = {}
     for (const tab of SECTION_TABS) out[tab.id] = (sections[tab.id] || []).length
@@ -255,39 +277,39 @@ export default function TrumpNewsPanel() {
         </div>
       </div>
 
-      <ImpactSummary
-        impact={data?.impact}
-        selectedThemeId={selectedThemeId}
-        filteredCount={filteredItems.length}
-        onClearTheme={() => setSelectedThemeId('')}
-        onSelectTheme={(theme) => {
-          setSelectedThemeId(prev => (String(prev) === String(theme.id) ? '' : theme.id))
-        }}
-      />
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        <ImpactSummary
+          impact={data?.impact}
+          selectedThemeId={selectedThemeId}
+          filteredCount={filteredItems.length}
+          onClearTheme={() => setSelectedThemeId('')}
+          onSelectTheme={(theme) => {
+            setSelectedThemeId(prev => (String(prev) === String(theme.id) ? '' : theme.id))
+          }}
+        />
 
-      <div className="flex-shrink-0 flex items-center gap-1 px-2 py-2 border-b border-[#1A1A1A] bg-[#0D0D0D] overflow-x-auto">
-        {SECTION_TABS.map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => {
-              setActiveSection(tab.id)
-              setSelectedThemeId('')
-            }}
-            className={`px-2.5 py-1 rounded text-[10px] whitespace-nowrap transition-colors flex-shrink-0 ${
-              activeSection === tab.id
-                ? 'bg-[#0D47A1] text-white'
-                : 'bg-[#1A1A1A] text-gray-400 hover:text-white hover:bg-[#222]'
-            }`}
-          >
-            {tab.label}
-            <span className="ml-1 text-[9px] opacity-60">{counts[tab.id] || 0}</span>
-          </button>
-        ))}
-      </div>
+        <div className="sticky top-0 z-20 flex items-center gap-1 px-2 py-2 border-b border-[#1A1A1A] bg-[#0D0D0D] overflow-x-auto">
+          {SECTION_TABS.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => {
+                setActiveSection(tab.id)
+                setSelectedThemeId('')
+              }}
+              className={`px-2.5 py-1 rounded text-[10px] whitespace-nowrap transition-colors flex-shrink-0 ${
+                activeSection === tab.id
+                  ? 'bg-[#0D47A1] text-white'
+                  : 'bg-[#1A1A1A] text-gray-400 hover:text-white hover:bg-[#222]'
+              }`}
+            >
+              {tab.label}
+              <span className="ml-1 text-[9px] opacity-60">{counts[tab.id] || 0}</span>
+            </button>
+          ))}
+        </div>
 
-      <div className="flex-1 overflow-y-auto">
         {selectedTheme && (
-          <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[#1A1A1A] bg-[#0B0F12] px-3 py-1.5">
+          <div className="flex items-center gap-2 border-b border-[#1A1A1A] bg-[#0B0F12] px-3 py-1.5">
             <span className="text-[10px] text-[#40C4FF] truncate">訊號篩選：{selectedTheme.label}</span>
             <span className="text-[9px] text-gray-500 flex-shrink-0">全部來源 {filteredItems.length} 則</span>
           </div>

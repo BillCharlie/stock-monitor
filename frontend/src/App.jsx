@@ -111,7 +111,7 @@ export default function App() {
               { id: 'chart',    label: 'K線圖' },
               { id: 'analysis', label: '個股分析' },
               { id: 'report',   label: '每日報告' },
-              { id: 'news',     label: '消息面' },
+              { id: 'news',     label: '資訊面' },
               { id: 'trumpNews', label: 'TrumpNews' },
               { id: 'activeEtf', label: '主動ETF' },
             ].map(tab => (
