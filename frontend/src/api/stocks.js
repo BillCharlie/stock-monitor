@@ -127,4 +127,9 @@ export const api = {
   },
 
   getHealth: () => request('/health'),
+
+  refreshAll: async () => request('/data/refresh-all', {
+    method: 'POST',
+    headers: await reportHeaders(),
+  }),
 }

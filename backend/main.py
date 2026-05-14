@@ -196,9 +196,9 @@ def _refresh_news():
 
 
 def _run_etf_holdings_refresh():
-    """15:00 scheduler: fetch all active ETF portfolio disclosures from TWSE."""
+    """18:00 scheduler: fetch all active ETF portfolio disclosures from TWSE."""
     global _etf_holdings
-    logger.info("Running 15:00 active ETF holdings refresh (%d ETFs)...", len(ACTIVE_ETFS))
+    logger.info("Running 18:00 active ETF holdings refresh (%d ETFs)...", len(ACTIVE_ETFS))
     try:
         _etf_holdings = fetch_all_etf_holdings(force_refresh=True)
         ok  = sum(1 for v in _etf_holdings.values() if v.get("total_holdings", 0) > 0)
@@ -206,10 +206,10 @@ def _run_etf_holdings_refresh():
         logger.info("ETF holdings refresh done: %d OK, %d errors", ok, err)
         fetch_etf_sector_summary(force_refresh=True, holdings_refresh=False)
         logger.info("ETF sector summary snapshot refreshed.")
-        _write_refresh_status("etf_holdings", {"ok": ok, "errors": err, "schedule": "15:00 Asia/Taipei"})
+        _write_refresh_status("etf_holdings", {"ok": ok, "errors": err, "schedule": "18:00 Asia/Taipei"})
     except Exception as e:
         logger.error("ETF holdings refresh failed: %s", e)
-        _write_refresh_status("etf_holdings", {"error": str(e), "schedule": "15:00 Asia/Taipei"})
+        _write_refresh_status("etf_holdings", {"error": str(e), "schedule": "18:00 Asia/Taipei"})
 
 
 def _iter_stock_items(node):
@@ -316,9 +316,9 @@ def _run_evening_data_refresh():
     summary["duration_seconds"] = round(time.time() - start, 1)
     _write_refresh_status("evening_data_refresh", {
         **summary,
-        "schedule": "18:30 Asia/Taipei",
+        "schedule": "18:00 Asia/Taipei",
     })
-    logger.info("18:30 data refresh complete: %s", summary)
+    logger.info("18:00 data refresh complete: %s", summary)
     return summary
 
 
@@ -353,7 +353,7 @@ async def lifespan(app: FastAPI):
     report_hour   = int(os.getenv("REPORT_HOUR", "17"))
     report_minute = int(os.getenv("REPORT_MINUTE", "0"))
     data_refresh_hour = int(os.getenv("DATA_REFRESH_HOUR", "18"))
-    data_refresh_minute = int(os.getenv("DATA_REFRESH_MINUTE", "30"))
+    data_refresh_minute = int(os.getenv("DATA_REFRESH_MINUTE", "0"))
     data_health_hour = int(os.getenv("DATA_HEALTH_HOUR", "19"))
     data_health_minute = int(os.getenv("DATA_HEALTH_MINUTE", "0"))
 
@@ -368,10 +368,13 @@ async def lifespan(app: FastAPI):
                       id="morning_email")
     # TrumpNews / news refresh every 5 hours.
     scheduler.add_job(_refresh_news, "interval", hours=5, id="news_refresh")
-    # Active ETF holdings: Mon–Fri 15:00 (after TWSE close + disclosure window)
+    # Active ETF holdings: Mon–Fri at 18:00 (merged with end-of-day data refresh window)
+    etf_hour   = int(os.getenv("ETF_HOLDINGS_HOUR",   str(data_refresh_hour)))
+    etf_minute = int(os.getenv("ETF_HOLDINGS_MINUTE", str(data_refresh_minute)))
     scheduler.add_job(_run_etf_holdings_refresh, "cron",
-                      day_of_week="mon-fri", hour=15, minute=0, id="etf_holdings")
-    # End-of-day data refresh: every day at 18:30 Taiwan time by default.
+                      day_of_week="mon-fri", hour=etf_hour, minute=etf_minute,
+                      id="etf_holdings")
+    # End-of-day data refresh: every day at 18:00 Taiwan time by default.
     scheduler.add_job(_run_evening_data_refresh, "cron",
                       hour=data_refresh_hour, minute=data_refresh_minute,
                       id="evening_data_refresh", max_instances=1, coalesce=True)
@@ -895,19 +898,31 @@ def health():
     report_hour   = int(os.getenv("REPORT_HOUR", "17"))
     report_minute = int(os.getenv("REPORT_MINUTE", "0"))
     data_refresh_hour = int(os.getenv("DATA_REFRESH_HOUR", "18"))
-    data_refresh_minute = int(os.getenv("DATA_REFRESH_MINUTE", "30"))
+    data_refresh_minute = int(os.getenv("DATA_REFRESH_MINUTE", "0"))
     data_health_hour = int(os.getenv("DATA_HEALTH_HOUR", "19"))
     data_health_minute = int(os.getenv("DATA_HEALTH_MINUTE", "0"))
     return {
         "status": "ok",
         "stocks_analyzed": len(_stock_analyses),
         "email_schedule": f"{report_hour:02d}:{report_minute:02d} Asia/Taipei (Mon-Fri)",
-        "data_refresh_schedule": f"{data_refresh_hour:02d}:{data_refresh_minute:02d} Asia/Taipei (daily)",
+        "data_refresh_schedule": f"{data_refresh_hour:02d}:{data_refresh_minute:02d} Asia/Taipei (三大法人/融資融券/主力動向/ETF/新聞 每日)",
         "data_health_schedule": f"{data_health_hour:02d}:{data_health_minute:02d} Asia/Taipei (daily)",
         "news_refresh_schedule": "every 5 hours",
         "trump_news_last_updated": get_trump_last_updated(),
         "refresh_status": _read_refresh_status(),
     }
+
+
+@app.post("/api/data/refresh-all", dependencies=[Depends(_require_report_auth)])
+def trigger_refresh_all():
+    """
+    Start a full data refresh in background (三大法人 / 融資融券 / 主力動向 / ETF / 新聞).
+    Returns immediately; the refresh runs asynchronously.
+    """
+    import threading
+    thread = threading.Thread(target=_run_evening_data_refresh, daemon=True, name="manual_refresh_all")
+    thread.start()
+    return {"status": "started", "message": "資料更新已在後台啟動，通常需要3-5分鐘，請稍後重新檢查狀態。"}
 
 
 @app.post("/api/health/data-check", dependencies=[Depends(_require_report_auth)])

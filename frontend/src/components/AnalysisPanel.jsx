@@ -1239,19 +1239,28 @@ function ageMinutes(ts) {
   } catch { return null }
 }
 
-function StatusDot({ ts, errorField }) {
-  if (errorField) return <span className="text-[#EF5350] font-bold">● 錯誤</span>
+// fresh < 6h | stale 6-36h | very_stale >36h | unknown
+function statusLevel(ts, err) {
+  if (err) return 'error'
   const age = ageMinutes(ts)
-  if (age === null) return <span className="text-gray-600">● 未知</span>
-  if (age < 360)   return <span className="text-[#26A69A] font-bold">● 正常</span>
-  if (age < 2160)  return <span className="text-[#FFA726] font-bold">● 偏舊</span>
-  return                   <span className="text-[#EF5350] font-bold">● 未更新</span>
+  if (age === null) return 'unknown'
+  if (age < 360)  return 'fresh'
+  if (age < 2160) return 'stale'
+  return 'very_stale'
+}
+
+function StatusDot({ ts, errorField }) {
+  const level = statusLevel(ts, errorField)
+  if (level === 'error')      return <span className="text-[#EF5350] font-bold">● 錯誤</span>
+  if (level === 'unknown')    return <span className="text-gray-600">● 未知</span>
+  if (level === 'fresh')      return <span className="text-[#26A69A] font-bold">● 正常</span>
+  if (level === 'stale')      return <span className="text-[#FFA726] font-bold">● 偏舊</span>
+  return                             <span className="text-[#EF5350] font-bold">● 未更新</span>
 }
 
 function StatusAge({ ts }) {
   const age = ageMinutes(ts)
   if (!ts || age === null) return <span className="text-gray-700">—</span>
-  // Format: MM-DD HH:mm
   try {
     const d = new Date(ts.replace(' ', 'T'))
     const mm = String(d.getMonth()+1).padStart(2,'0')
@@ -1259,7 +1268,9 @@ function StatusAge({ ts }) {
     const hh = String(d.getHours()).padStart(2,'0')
     const min = String(d.getMinutes()).padStart(2,'0')
     const ageH = Math.round(age / 60)
-    const ageLabel = age < 60 ? `${Math.round(age)}分前` : ageH < 48 ? `${ageH}小時前` : `${Math.round(ageH/24)}天前`
+    const ageLabel = age < 60
+      ? `${Math.round(age)}分前`
+      : ageH < 48 ? `${ageH}小時前` : `${Math.round(ageH/24)}天前`
     return (
       <span>
         <span className="text-gray-300">{mm}-{dd} {hh}:{min}</span>
@@ -1270,11 +1281,13 @@ function StatusAge({ ts }) {
 }
 
 export function DataStatusPanel() {
-  const [health, setHealth] = useState(null)
-  const [etfData, setEtfData] = useState(null)
+  const [health, setHealth]     = useState(null)
+  const [etfData, setEtfData]   = useState(null)
   const [newsData, setNewsData] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading]   = useState(true)
   const [checkedAt, setCheckedAt] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshMsg, setRefreshMsg] = useState(null)
 
   const reload = () => {
     setLoading(true)
@@ -1283,34 +1296,78 @@ export function DataStatusPanel() {
       api.getAllEtfHoldings(),
       api.getNews(),
     ]).then(([h, etf, news]) => {
-      if (h.status === 'fulfilled')   setHealth(h.value)
-      if (etf.status === 'fulfilled') setEtfData(etf.value)
+      if (h.status === 'fulfilled')    setHealth(h.value)
+      if (etf.status === 'fulfilled')  setEtfData(etf.value)
       if (news.status === 'fulfilled') setNewsData(news.value)
       setCheckedAt(new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }))
       setLoading(false)
     })
   }
 
-  useEffect(() => { reload() }, [])
+  // Auto-refresh stale/unknown data on first load
+  const triggerRefreshAll = async () => {
+    if (refreshing) return
+    setRefreshing(true)
+    setRefreshMsg('正在後台更新所有資料（約3-5分鐘），請稍後重新檢查狀態...')
+    try {
+      await api.refreshAll()
+      setRefreshMsg('更新指令已發送，後台正在抓取資料中...')
+    } catch (e) {
+      setRefreshMsg(`更新啟動失敗: ${e.message}`)
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
+  useEffect(() => {
+    reload()
+  }, [])
+
+  // After data loads, auto-refresh if any critical module is stale/unknown
+  useEffect(() => {
+    if (!health || loading) return
+    const rs = health.refresh_status || {}
+    const eveningTs = rs.evening_data_refresh?.last_updated
+    const etfTs = rs.etf_holdings?.last_updated
+    const needsRefresh = ['unknown', 'very_stale'].includes(statusLevel(eveningTs, rs.evening_data_refresh?.error))
+      || ['unknown', 'very_stale'].includes(statusLevel(etfTs, rs.etf_holdings?.error))
+    if (needsRefresh) triggerRefreshAll()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [health, loading])
 
   const rs = health?.refresh_status || {}
 
-  // Determine ETF last_updated: look at per-ETF entries in etfData
-  const etfTs = (() => {
+  // ETF last_updated from per-ETF cache entries
+  const etfCacheTs = (() => {
     if (!etfData) return null
-    const entries = Object.values(etfData)
-    const times = entries.map(e => e.last_updated || e.fetched_at).filter(Boolean)
-    if (!times.length) return null
-    return times.sort().at(-1)   // most recent
+    const times = Object.values(etfData)
+      .map(e => e.last_updated || e.fetched_at)
+      .filter(Boolean)
+    return times.sort().at(-1) ?? null
   })()
 
-  // News last_updated: try category last_updated
+  const etfTs = rs.etf_holdings?.last_updated || etfCacheTs
+
   const newsTs = (() => {
     if (!newsData) return null
     if (newsData.last_updated) return newsData.last_updated
     const cats = Object.values(newsData.categories || {})
-    const times = cats.map(c => c.last_updated).filter(Boolean)
-    return times.sort().at(-1) || null
+    return cats.map(c => c.last_updated).filter(Boolean).sort().at(-1) ?? null
+  })()
+
+  // All rows; 三大法人 / 融資融券 / 主力動向 share evening_data_refresh timestamp
+  const eveningTs = rs.evening_data_refresh?.last_updated
+  const eveningErr = rs.evening_data_refresh?.error
+  const eveningExtra = (() => {
+    const s = rs.evening_data_refresh
+    if (!s) return null
+    const p = []
+    if (s.three_forces_ok != null) p.push(`三大法人 ✅${s.three_forces_ok}`)
+    if (s.margin_ok       != null) p.push(`融資 ✅${s.margin_ok}`)
+    if (s.major_force_ok  != null) p.push(`主力 ✅${s.major_force_ok}`)
+    if (s.symbol_errors   != null && s.symbol_errors > 0) p.push(`❌${s.symbol_errors}`)
+    if (s.duration_seconds != null) p.push(`耗時${s.duration_seconds}s`)
+    return p.join('  ') || null
   })()
 
   const rows = [
@@ -1320,32 +1377,64 @@ export function DataStatusPanel() {
       schedule: '常駐',
       ts: health ? new Date().toISOString() : null,
       err: health?.status !== 'ok' ? health?.status : null,
-      extra: health ? `已分析 ${health.stocks_analyzed} 支股票` : null,
+      extra: health ? `已分析 ${health.stocks_analyzed} 支` : null,
     },
     {
-      name: '股票分析',
-      source: 'yfinance / FinMind',
-      schedule: '18:30 每日',
-      ts: rs.evening_data_refresh?.last_updated,
-      err: rs.evening_data_refresh?.error,
-      extra: (() => {
-        const s = rs.evening_data_refresh
-        if (!s) return null
-        const parts = []
-        if (s.ok != null) parts.push(`✅ ${s.ok}支`)
-        if (s.errors != null) parts.push(`❌ ${s.errors}支`)
-        if (s.duration_seconds != null) parts.push(`耗時 ${s.duration_seconds}s`)
-        return parts.join('  ')
-      })(),
+      name: '各股分析',
+      source: 'yfinance',
+      schedule: '18:00 每日',
+      ts: eveningTs,
+      err: eveningErr,
+      extra: eveningExtra,
     },
     {
-      name: 'ETF持倉',
+      name: '三大法人',
+      source: 'FinMind',
+      schedule: '18:00 每日',
+      ts: eveningTs,
+      err: eveningErr,
+      extra: rs.evening_data_refresh?.three_forces_ok != null
+        ? `✅ ${rs.evening_data_refresh.three_forces_ok} 支`
+        : null,
+    },
+    {
+      name: '融資融券',
+      source: 'FinMind',
+      schedule: '18:00 每日',
+      ts: eveningTs,
+      err: eveningErr,
+      extra: rs.evening_data_refresh?.margin_ok != null
+        ? `✅ ${rs.evening_data_refresh.margin_ok} 支`
+        : null,
+    },
+    {
+      name: '主力動向',
+      source: 'FinMind',
+      schedule: '18:00 每日',
+      ts: eveningTs,
+      err: eveningErr,
+      extra: rs.evening_data_refresh?.major_force_ok != null
+        ? `✅ ${rs.evening_data_refresh.major_force_ok} 支`
+        : null,
+    },
+    {
+      name: '主動ETF投資組合',
       source: '公開資訊觀測站',
-      schedule: '15:00 每日',
-      ts: rs.etf_holdings?.last_updated || etfTs,
+      schedule: '18:00 每日',
+      ts: etfTs,
       err: rs.etf_holdings?.error,
       extra: rs.etf_holdings
-        ? `✅ ${rs.etf_holdings.ok ?? '?'}支 / ❌ ${rs.etf_holdings.errors ?? '?'}支`
+        ? `✅ ${rs.etf_holdings.ok ?? '?'} / ❌ ${rs.etf_holdings.errors ?? '?'}`
+        : (etfData ? `${Object.keys(etfData).length} 檔已快取` : null),
+    },
+    {
+      name: '主動ETF彙總',
+      source: '公開資訊觀測站',
+      schedule: '18:00 每日',
+      ts: etfTs,
+      err: rs.etf_holdings?.error,
+      extra: rs.evening_data_refresh
+        ? `etf ✅${rs.evening_data_refresh.etf_ok ?? '?'} ❌${rs.evening_data_refresh.etf_errors ?? '?'}`
         : null,
     },
     {
@@ -1382,24 +1471,48 @@ export function DataStatusPanel() {
     },
   ]
 
+  const hasIssue = rows.some(r => ['unknown', 'very_stale', 'error'].includes(statusLevel(r.ts, r.err)))
+
   return (
     <div className="p-4 overflow-y-auto h-full">
-      <div className="flex items-center justify-between mb-4">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3">
         <div>
           <div className="text-lg font-bold text-white">數據狀態監控</div>
-          <div className="text-xs text-gray-500">各模組資料抓取時效確認（非即時數值）</div>
+          <div className="text-xs text-gray-500">各模組資料抓取時效（非即時數值）</div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {checkedAt && <span className="text-[10px] text-gray-600">最後檢查 {checkedAt}</span>}
+          <button
+            onClick={triggerRefreshAll}
+            disabled={refreshing || loading}
+            className="px-3 py-1 text-xs bg-[#1A2A3A] hover:bg-[#223344] text-blue-400 rounded border border-[#2A3A4A] disabled:opacity-40 transition-colors"
+          >
+            {refreshing ? '更新中...' : '⬆ 全部更新'}
+          </button>
           <button
             onClick={reload}
             disabled={loading}
             className="px-3 py-1 text-xs bg-[#1A2A1A] hover:bg-[#223322] text-green-400 rounded border border-[#2A3A2A] disabled:opacity-40 transition-colors"
           >
-            {loading ? '更新中...' : '↻ 重新檢查'}
+            {loading ? '檢查中...' : '↻ 重新檢查'}
           </button>
         </div>
       </div>
+
+      {/* Auto-refresh notice */}
+      {refreshMsg && (
+        <div className="mb-3 px-3 py-2 rounded bg-[#0A1A2A] border border-[#1A3A5A] text-xs text-blue-300">
+          {refreshMsg}
+        </div>
+      )}
+
+      {/* Auto-trigger notice when stale */}
+      {!refreshing && hasIssue && !refreshMsg && !loading && (
+        <div className="mb-3 px-3 py-2 rounded bg-[#1A0A00] border border-[#3A2A00] text-xs text-[#FFA726]">
+          ⚠ 偵測到部分模組資料過時或未知，已自動觸發後台更新。如未看到回應，請點「⬆ 全部更新」。
+        </div>
+      )}
 
       {loading && !health ? (
         <div className="text-gray-500 text-sm py-8 text-center">載入中...</div>
@@ -1408,29 +1521,35 @@ export function DataStatusPanel() {
           <table className="w-full text-xs border-collapse">
             <thead>
               <tr className="text-gray-500 border-b border-[#2A2A2A]">
-                <th className="text-left py-2 pr-4 font-medium">模組</th>
-                <th className="text-left py-2 pr-4 font-medium">資料來源</th>
-                <th className="text-left py-2 pr-4 font-medium">排程</th>
-                <th className="text-left py-2 pr-4 font-medium">最後更新</th>
-                <th className="text-left py-2 pr-4 font-medium">狀態</th>
+                <th className="text-left py-2 pr-3 font-medium">模組</th>
+                <th className="text-left py-2 pr-3 font-medium">資料來源</th>
+                <th className="text-left py-2 pr-3 font-medium">排程</th>
+                <th className="text-left py-2 pr-3 font-medium">最後更新</th>
+                <th className="text-left py-2 pr-3 font-medium">狀態</th>
                 <th className="text-left py-2 font-medium">備註</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map(row => (
-                <tr key={row.name} className="border-b border-[#1A1A1A] hover:bg-[#141414]">
-                  <td className="py-2.5 pr-4 font-semibold text-gray-200">{row.name}</td>
-                  <td className="py-2.5 pr-4 text-gray-500">{row.source}</td>
-                  <td className="py-2.5 pr-4 text-gray-400 font-mono">{row.schedule}</td>
-                  <td className="py-2.5 pr-4 font-mono text-sm">
-                    <StatusAge ts={row.ts} />
-                  </td>
-                  <td className="py-2.5 pr-4 text-sm">
-                    <StatusDot ts={row.ts} errorField={row.err} />
-                  </td>
-                  <td className="py-2.5 text-[10px] text-gray-600">{row.extra || '—'}</td>
-                </tr>
-              ))}
+              {rows.map(row => {
+                const level = statusLevel(row.ts, row.err)
+                const rowBg = level === 'error' ? 'bg-[#1A0A0A]'
+                  : level === 'very_stale' ? 'bg-[#1A1000]'
+                  : ''
+                return (
+                  <tr key={row.name} className={`border-b border-[#1A1A1A] hover:bg-[#141414] ${rowBg}`}>
+                    <td className="py-2 pr-3 font-semibold text-gray-200">{row.name}</td>
+                    <td className="py-2 pr-3 text-gray-500">{row.source}</td>
+                    <td className="py-2 pr-3 text-gray-400 font-mono">{row.schedule}</td>
+                    <td className="py-2 pr-3 font-mono">
+                      <StatusAge ts={row.ts} />
+                    </td>
+                    <td className="py-2 pr-3">
+                      <StatusDot ts={row.ts} errorField={row.err} />
+                    </td>
+                    <td className="py-2 text-[10px] text-gray-600">{row.extra || '—'}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -1438,8 +1557,8 @@ export function DataStatusPanel() {
 
       {/* Raw refresh_status detail */}
       {health && Object.keys(rs).length > 0 && (
-        <details className="mt-6">
-          <summary className="text-xs text-gray-600 cursor-pointer hover:text-gray-400">
+        <details className="mt-5">
+          <summary className="text-xs text-gray-600 cursor-pointer hover:text-gray-400 select-none">
             ▶ 原始排程日誌
           </summary>
           <div className="mt-2 space-y-2">
