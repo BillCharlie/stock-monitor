@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from analysis import analyze_stock, generate_daily_report
+from data_health import run_data_health_check
 from email_sender import send_daily_report, send_login_notification, send_test_email
 from gpt_analysis import generate_gpt_report
 from news_fetcher import fetch_all_news, fetch_category_news, get_last_updated, NEWS_CATEGORIES
@@ -321,6 +322,31 @@ def _run_evening_data_refresh():
     return summary
 
 
+def _run_data_health_report():
+    """19:00 daily job: verify module data freshness and email MD/PDF report."""
+    try:
+        result = run_data_health_check(send_email=True)
+        _write_refresh_status("data_health_check", {
+            "status": result.get("status"),
+            "status_label": result.get("status_label"),
+            "summary_counts": result.get("summary_counts"),
+            "issues_total": result.get("issues_total"),
+            "md_path": result.get("md_path"),
+            "pdf_path": result.get("pdf_path"),
+            "email_sent": result.get("email_sent"),
+            "duration_seconds": result.get("duration_seconds"),
+            "schedule": "19:00 Asia/Taipei",
+        })
+        return result
+    except Exception as e:
+        logger.error("Data health report failed: %s", e, exc_info=True)
+        _write_refresh_status("data_health_check", {
+            "error": str(e),
+            "schedule": "19:00 Asia/Taipei",
+        })
+        return {"status": "error", "error": str(e)}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import threading
@@ -328,6 +354,8 @@ async def lifespan(app: FastAPI):
     report_minute = int(os.getenv("REPORT_MINUTE", "0"))
     data_refresh_hour = int(os.getenv("DATA_REFRESH_HOUR", "18"))
     data_refresh_minute = int(os.getenv("DATA_REFRESH_MINUTE", "30"))
+    data_health_hour = int(os.getenv("DATA_HEALTH_HOUR", "19"))
+    data_health_minute = int(os.getenv("DATA_HEALTH_MINUTE", "0"))
 
     scheduler = BackgroundScheduler(timezone="Asia/Taipei")
     # Taiwan close: Mon–Fri 13:40
@@ -347,10 +375,15 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(_run_evening_data_refresh, "cron",
                       hour=data_refresh_hour, minute=data_refresh_minute,
                       id="evening_data_refresh", max_instances=1, coalesce=True)
+    # Data health report: every day at 19:00 Taiwan time by default.
+    scheduler.add_job(_run_data_health_report, "cron",
+                      hour=data_health_hour, minute=data_health_minute,
+                      id="data_health_check", max_instances=1, coalesce=True)
     scheduler.start()
     logger.info(
-        "Scheduler started — morning email at %02d:%02d; data refresh at %02d:%02d (Asia/Taipei)",
+        "Scheduler started - morning email at %02d:%02d; data refresh at %02d:%02d; data health at %02d:%02d (Asia/Taipei)",
         report_hour, report_minute, data_refresh_hour, data_refresh_minute,
+        data_health_hour, data_health_minute,
     )
 
     # Background initial news fetch (only fills cache if missing/stale)
@@ -863,15 +896,37 @@ def health():
     report_minute = int(os.getenv("REPORT_MINUTE", "0"))
     data_refresh_hour = int(os.getenv("DATA_REFRESH_HOUR", "18"))
     data_refresh_minute = int(os.getenv("DATA_REFRESH_MINUTE", "30"))
+    data_health_hour = int(os.getenv("DATA_HEALTH_HOUR", "19"))
+    data_health_minute = int(os.getenv("DATA_HEALTH_MINUTE", "0"))
     return {
         "status": "ok",
         "stocks_analyzed": len(_stock_analyses),
         "email_schedule": f"{report_hour:02d}:{report_minute:02d} Asia/Taipei (Mon-Fri)",
         "data_refresh_schedule": f"{data_refresh_hour:02d}:{data_refresh_minute:02d} Asia/Taipei (daily)",
+        "data_health_schedule": f"{data_health_hour:02d}:{data_health_minute:02d} Asia/Taipei (daily)",
         "news_refresh_schedule": "every 5 hours",
         "trump_news_last_updated": get_trump_last_updated(),
         "refresh_status": _read_refresh_status(),
     }
+
+
+@app.post("/api/health/data-check", dependencies=[Depends(_require_report_auth)])
+def trigger_data_health_check(email: bool = Query(True)):
+    """Manually run the data-health check and optionally email MD/PDF attachments."""
+    result = run_data_health_check(send_email=email)
+    _write_refresh_status("data_health_check", {
+        "status": result.get("status"),
+        "status_label": result.get("status_label"),
+        "summary_counts": result.get("summary_counts"),
+        "issues_total": result.get("issues_total"),
+        "md_path": result.get("md_path"),
+        "pdf_path": result.get("pdf_path"),
+        "email_sent": result.get("email_sent"),
+        "duration_seconds": result.get("duration_seconds"),
+        "schedule": "19:00 Asia/Taipei",
+        "trigger": "manual",
+    })
+    return result
 
 
 @app.post("/api/test/email", dependencies=[Depends(_require_report_auth)])
@@ -942,6 +997,7 @@ def test_env():
         "GMAIL_SENDER", "GMAIL_APP_PASSWORD",
         "REPORT_RECIPIENT", "REPORT_RECIPIENT_2",
         "OPENAI_API_KEY", "REPORT_HOUR", "REPORT_MINUTE",
+        "DATA_HEALTH_HOUR", "DATA_HEALTH_MINUTE",
         "API_SECRET_REPORT", "API_SECRET_STOCK", "DATA_DIR",
         "TRUMP_X_BEARER_TOKEN", "TRUMP_X_USER_ID", "TRUMP_X_RSS_URL",
     ]

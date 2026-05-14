@@ -20,6 +20,15 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 logger = logging.getLogger(__name__)
 
 
+def _get_report_recipients() -> list[str]:
+    recipients: list[str] = []
+    for key in ("REPORT_RECIPIENT", "REPORT_RECIPIENT_2", "REPORT_RECIPIENT_3"):
+        val = os.getenv(key, "").strip()
+        if val:
+            recipients.append(val)
+    return recipients or ["chenbill718@gmail.com"]
+
+
 def _build_chip_section_html(all_results: dict) -> str:
     """Build 三大法人/融資融券 summary HTML table from FinMind data in all_results."""
     rows_buy, rows_sell = [], []
@@ -332,14 +341,7 @@ def send_daily_report(html_content: str, daily_report: dict, pdf_path: str | Non
     password = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
     resend_key = os.getenv("RESEND_API_KEY", "").strip()
 
-    # Support multiple recipients via REPORT_RECIPIENT and REPORT_RECIPIENT_2..N
-    recipients: list[str] = []
-    for key in ("REPORT_RECIPIENT", "REPORT_RECIPIENT_2", "REPORT_RECIPIENT_3"):
-        val = os.getenv(key, "").strip()
-        if val:
-            recipients.append(val)
-    if not recipients:
-        recipients = ["chenbill718@gmail.com"]
+    recipients = _get_report_recipients()
 
     smtp_configured = bool(sender) and bool(password) and password != "xxxxxxxxxxxxxxxx"
     if not resend_key and not smtp_configured:
@@ -386,6 +388,145 @@ def send_daily_report(html_content: str, daily_report: dict, pdf_path: str | Non
         logger.info(f"PDF attached: {pdf_filename}")
 
     # ── fallback: Gmail SMTP (local dev only) ─────────────────────────────────
+    return _smtp_send(sender, password, recipients, msg)
+
+
+def _build_resend_attachments(paths: list[str | None]) -> list[dict]:
+    import base64
+
+    attachments: list[dict] = []
+    for path in paths:
+        if not path or not os.path.exists(path):
+            continue
+        with open(path, "rb") as f:
+            attachments.append({
+                "filename": os.path.basename(path),
+                "content": base64.b64encode(f.read()).decode(),
+            })
+    return attachments
+
+
+def _send_via_resend_with_attachments(
+    api_key: str,
+    recipients: list[str],
+    subject: str,
+    full_html: str,
+    attachments: list[str | None],
+) -> bool:
+    import requests as _req
+
+    payload: dict = {
+        "from": "股市監控系統 <onboarding@resend.dev>",
+        "to": recipients,
+        "subject": subject,
+        "html": full_html,
+    }
+    encoded = _build_resend_attachments(attachments)
+    if encoded:
+        payload["attachments"] = encoded
+
+    try:
+        resp = _req.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+            timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            logger.info("Resend API: data health email sent -> %s", recipients)
+            return True
+        logger.error("Resend API %d: %s", resp.status_code, resp.text)
+        return False
+    except Exception as e:
+        logger.error("Resend API request failed: %s", e)
+        return False
+
+
+def _attach_file(msg: MIMEMultipart, path: str | None, subtype: str | None = None) -> None:
+    if not path or not os.path.exists(path):
+        return
+    filename = os.path.basename(path)
+    ext = os.path.splitext(filename)[1].lower()
+    if subtype == "markdown" or ext in (".md", ".markdown"):
+        with open(path, encoding="utf-8") as f:
+            attachment = MIMEText(f.read(), "markdown", "utf-8")
+    else:
+        with open(path, "rb") as f:
+            attachment = MIMEApplication(f.read(), _subtype=subtype or "octet-stream")
+    attachment.add_header("Content-Disposition", "attachment", filename=filename)
+    msg.attach(attachment)
+    logger.info("Attachment added: %s", filename)
+
+
+def send_data_health_report(
+    html_content: str,
+    subject: str,
+    md_path: str | None = None,
+    pdf_path: str | None = None,
+) -> bool:
+    """
+    Send the scheduled data-health report with Markdown and PDF attachments.
+    Reuses the same recipient and delivery settings as the daily report.
+    """
+    sender = os.getenv("GMAIL_SENDER", "").strip()
+    password = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    recipients = _get_report_recipients()
+
+    smtp_configured = bool(sender) and bool(password) and password != "xxxxxxxxxxxxxxxx"
+    if not resend_key and not smtp_configured:
+        logger.warning("No RESEND_API_KEY or Gmail credentials configured in .env - data health email skipped")
+        return False
+
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    full_html = f"""<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body {{ margin:0; padding:0; background:#0D0D0D; color:#E0E0E0; font-family:-apple-system,'PingFang TC','Microsoft JhengHei',Arial,sans-serif; font-size:15px; line-height:1.65; }}
+  .container {{ max-width:860px; margin:0 auto; padding:24px 16px; }}
+  .header {{ background:#10243a; border-bottom:2px solid #40C4FF; padding:20px 24px; border-radius:8px 8px 0 0; }}
+  .header h1 {{ margin:0; color:#8fd8ff; font-size:21px; }}
+  .header p {{ margin:6px 0 0; color:#a8bdd1; font-size:13px; }}
+  .content {{ background:#151515; padding:24px; border-radius:0 0 8px 8px; }}
+  table {{ width:100%; border-collapse:collapse; }}
+  th, td {{ border-bottom:1px solid #2a2a2a; padding:8px 10px; text-align:left; }}
+  th {{ color:#9db7d1; background:#101820; }}
+  .ok {{ color:#55d6a7; }} .warn {{ color:#ffc857; }} .error {{ color:#ff6b6b; }} .unknown {{ color:#9aa4ad; }}
+  .footer {{ color:#666; font-size:12px; margin-top:18px; text-align:center; }}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>Stock Monitor 數據健康檢查</h1>
+    <p>生成時間：{generated_at} | 排程：每日 19:00 Asia/Taipei | 附件含 Markdown 與 PDF</p>
+  </div>
+  <div class="content">{html_content}</div>
+  <div class="footer">本報告只檢查更新狀態與資料完整性，不附原始價格、持股或新聞明細。</div>
+</div>
+</body>
+</html>"""
+
+    if resend_key:
+        if _send_via_resend_with_attachments(resend_key, recipients, subject, full_html, [md_path, pdf_path]):
+            return True
+        if not smtp_configured:
+            return False
+        logger.warning("Resend failed; falling back to Gmail SMTP")
+
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = subject
+    msg["From"] = f"股市監控系統 <{sender}>"
+    msg["To"] = ", ".join(recipients)
+
+    html_part = MIMEMultipart("alternative")
+    html_part.attach(MIMEText(full_html, "html", "utf-8"))
+    msg.attach(html_part)
+    _attach_file(msg, md_path, subtype="markdown")
+    _attach_file(msg, pdf_path, subtype="pdf")
     return _smtp_send(sender, password, recipients, msg)
 
 
