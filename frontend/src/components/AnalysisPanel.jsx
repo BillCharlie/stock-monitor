@@ -842,7 +842,7 @@ function EtfHoldingsPanel({ symbol }) {
 
             {/* Holdings table */}
             {data.holdings?.length > 0 && (() => {
-              // Build a change lookup by stock_code for inline badges
+              // Build change lookup by stock_code
               const changeMap = {}
               if (data.changes) {
                 for (const h of (data.changes.new_positions || []))
@@ -852,38 +852,59 @@ function EtfHoldingsPanel({ symbol }) {
                 for (const h of (data.changes.decreased || []))
                   changeMap[h.stock_code] = { type: 'down', row: h }
               }
+
+              // Compute ±% change (prefer weight_delta pp, else shares pct)
+              const getChgPct = (chg) => {
+                if (!chg || chg.type === 'new') return null
+                const r = chg.row || {}
+                if (r.change_basis === 'weight' && r.weight_delta != null)
+                  return { v: +Number(r.weight_delta).toFixed(2), unit: 'pp' }
+                if (r.shares_delta != null && r.prev_shares > 0)
+                  return { v: +(r.shares_delta / r.prev_shares * 100).toFixed(1), unit: '%' }
+                return null
+              }
+
               return (
-                <div className="overflow-x-auto max-h-80 overflow-y-auto">
-                  <table className="w-full text-[10px]">
+                <div className="max-h-80 overflow-y-auto">
+                  {/* table-fixed prevents columns from overflowing container */}
+                  <table className="w-full text-[10px] table-fixed">
+                    <colgroup>
+                      <col className="w-5" />
+                      <col className="w-[38px]" />
+                      <col />  {/* name: takes remaining space */}
+                      <col className="w-[44px]" />
+                      <col className="w-[48px]" />
+                    </colgroup>
                     <thead className="sticky top-0 bg-[#0D0D0D]">
                       <tr className="text-gray-600 border-b border-[#1E1E1E]">
-                        <td className="py-1 pr-1 w-5">#</td>
-                        <td className="py-1 pr-2">代號</td>
-                        <td className="py-1 pr-2">名稱</td>
-                        <td className="py-1 pr-2 text-right">持股數</td>
-                        <td className="py-1 pr-2 text-right text-[#FFA726]">占比%</td>
+                        <td className="py-1">#</td>
+                        <td className="py-1">代號</td>
+                        <td className="py-1">名稱</td>
+                        <td className="py-1 text-right text-[#FFA726]">占比</td>
                         <td className="py-1 text-right">變化</td>
                       </tr>
                     </thead>
                     <tbody>
                       {data.holdings.map((h, i) => {
-                        const chg = changeMap[h.stock_code]
+                        const chg    = changeMap[h.stock_code]
+                        const chgPct = getChgPct(chg)
                         const chgCell = chg
                           ? chg.type === 'new'
-                            ? <span className="text-[#26A69A] font-bold">NEW</span>
-                            : chg.type === 'up'
-                              ? <span className="text-[#40C4FF]">↑{fmtEtfDelta(chg.row)}</span>
-                              : <span className="text-[#FFA726]">↓{fmtEtfDelta(chg.row).replace('-', '')}</span>
+                            ? <span className="text-[#26A69A] font-bold text-[9px]">NEW</span>
+                            : chgPct
+                              ? chg.type === 'up'
+                                ? <span className="text-[#40C4FF]">↑{chgPct.v}%</span>
+                                : <span className="text-[#FFA726]">↓{Math.abs(chgPct.v)}%</span>
+                              : chg.type === 'up'
+                                ? <span className="text-[#40C4FF]">↑</span>
+                                : <span className="text-[#FFA726]">↓</span>
                           : <span className="text-gray-800">─</span>
                         return (
                           <tr key={i} className={`border-b border-[#111] hover:bg-[#111] ${chg ? 'bg-[#0A0A12]' : ''}`}>
-                            <td className="py-1 pr-1 text-gray-700">{i + 1}</td>
-                            <td className="py-1 pr-2 font-mono text-[#40C4FF]">{h.stock_code || '—'}</td>
-                            <td className="py-1 pr-2 text-gray-300 truncate max-w-[90px]">{h.stock_name}</td>
-                            <td className="py-1 pr-2 text-right font-mono text-gray-400">
-                              {h.shares != null ? h.shares.toLocaleString() : '—'}
-                            </td>
-                            <td className="py-1 pr-2 text-right font-mono">
+                            <td className="py-1 text-gray-700">{i + 1}</td>
+                            <td className="py-1 font-mono text-[#40C4FF] truncate">{h.stock_code || '—'}</td>
+                            <td className="py-1 text-gray-300 truncate overflow-hidden">{h.stock_name || '—'}</td>
+                            <td className="py-1 text-right font-mono">
                               {h.weight_pct != null
                                 ? <span className="text-[#FFA726]">{h.weight_pct}%</span>
                                 : <span className="text-gray-700">—</span>}
