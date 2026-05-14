@@ -9,7 +9,9 @@ import hashlib
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -181,11 +183,119 @@ def _run_etf_holdings_refresh():
         logger.error("ETF holdings refresh failed: %s", e)
 
 
+def _iter_stock_items(node):
+    """Yield stock-like dicts from nested watchlist structures."""
+    if isinstance(node, dict):
+        if isinstance(node.get("symbol"), str):
+            yield node
+            return
+        for value in node.values():
+            yield from _iter_stock_items(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _iter_stock_items(item)
+
+
+def _collect_refresh_symbols() -> list[str]:
+    full_wl = dict(WATCHLIST)
+    user_wl = load_user_watchlist()
+    if user_wl:
+        full_wl.update(user_wl)
+    custom = load_custom_stocks()
+    if custom:
+        full_wl["自訂觀察清單"] = custom
+
+    seen: set[str] = set()
+    symbols: list[str] = []
+    for item in _iter_stock_items(full_wl):
+        symbol = str(item.get("symbol", "")).strip()
+        key = symbol.upper()
+        if symbol and key not in seen:
+            seen.add(key)
+            symbols.append(symbol)
+    return symbols
+
+
+def _run_evening_data_refresh():
+    """
+    18:30 daily job: force-refresh the data panels users inspect after market close:
+    主力動向 / 三大法人 / 融資融券, 主動 ETF, and 消息面.
+    """
+    global _etf_holdings
+    start = time.time()
+    symbols = _collect_refresh_symbols()
+    tw_symbols = [
+        symbol for symbol in symbols
+        if symbol.upper().endswith((".TW", ".TWO"))
+    ]
+    delay = max(0.0, float(os.getenv("MARKET_DATA_REFRESH_SLEEP_SECONDS", "0.2")))
+
+    summary = {
+        "tw_symbols": len(tw_symbols),
+        "major_force_ok": 0,
+        "three_forces_ok": 0,
+        "margin_ok": 0,
+        "symbol_errors": 0,
+        "etf_ok": 0,
+        "etf_errors": 0,
+        "news_categories": 0,
+        "news_articles": 0,
+    }
+
+    logger.info("Running 18:30 data refresh (%d TW/TPEX symbols)...", len(tw_symbols))
+
+    for symbol in tw_symbols:
+        try:
+            investors = get_investors_data(symbol, force_refresh=True)
+            if investors.get("error"):
+                summary["symbol_errors"] += 1
+            else:
+                summary["three_forces_ok"] += 1
+                summary["major_force_ok"] += 1
+
+            margin = investors.get("margin") if isinstance(investors, dict) else None
+            if isinstance(margin, dict) and not margin.get("error"):
+                summary["margin_ok"] += 1
+        except Exception as e:
+            summary["symbol_errors"] += 1
+            logger.warning("Evening refresh failed for %s: %s", symbol, e)
+
+        if delay:
+            time.sleep(delay)
+
+    try:
+        _etf_holdings = fetch_all_etf_holdings(force_refresh=True)
+        summary["etf_ok"] = sum(
+            1 for data in _etf_holdings.values()
+            if data.get("total_holdings", 0) > 0
+        )
+        summary["etf_errors"] = sum(1 for data in _etf_holdings.values() if data.get("error"))
+        fetch_etf_sector_summary(force_refresh=True, holdings_refresh=False)
+    except Exception as e:
+        summary["etf_errors"] += len(ACTIVE_ETFS)
+        logger.error("Evening ETF refresh failed: %s", e)
+
+    try:
+        news = fetch_all_news(force=True)
+        summary["news_categories"] = len(news)
+        summary["news_articles"] = sum(len(items) for items in news.values())
+        fetch_trump_news(force=True)
+    except Exception as e:
+        logger.error("Evening news refresh failed: %s", e)
+
+    _stock_analyses.clear()
+    summary["duration_seconds"] = round(time.time() - start, 1)
+    logger.info("18:30 data refresh complete: %s", summary)
+    return summary
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import threading
     report_hour   = int(os.getenv("REPORT_HOUR", "17"))
     report_minute = int(os.getenv("REPORT_MINUTE", "0"))
+    data_refresh_hour = int(os.getenv("DATA_REFRESH_HOUR", "18"))
+    data_refresh_minute = int(os.getenv("DATA_REFRESH_MINUTE", "30"))
 
     scheduler = BackgroundScheduler(timezone="Asia/Taipei")
     # Taiwan close: Mon–Fri 13:40
@@ -201,8 +311,15 @@ async def lifespan(app: FastAPI):
     # Active ETF holdings: Mon–Fri 15:00 (after TWSE close + disclosure window)
     scheduler.add_job(_run_etf_holdings_refresh, "cron",
                       day_of_week="mon-fri", hour=15, minute=0, id="etf_holdings")
+    # End-of-day data refresh: every day at 18:30 Taiwan time by default.
+    scheduler.add_job(_run_evening_data_refresh, "cron",
+                      hour=data_refresh_hour, minute=data_refresh_minute,
+                      id="evening_data_refresh", max_instances=1, coalesce=True)
     scheduler.start()
-    logger.info(f"Scheduler started — morning email at {report_hour:02d}:{report_minute:02d} (Asia/Taipei)")
+    logger.info(
+        "Scheduler started — morning email at %02d:%02d; data refresh at %02d:%02d (Asia/Taipei)",
+        report_hour, report_minute, data_refresh_hour, data_refresh_minute,
+    )
 
     # Background initial news fetch (only fills cache if missing/stale)
     threading.Thread(target=fetch_all_news, daemon=True).start()
@@ -449,19 +566,19 @@ def get_stock_quote(symbol: str):
 # ─── Investor / institutional data ────────────────────────────────────────────
 
 @app.get("/api/stocks/{symbol}/investors")
-def get_stock_investors(symbol: str):
-    return get_investors_data(symbol)
+def get_stock_investors(symbol: str, refresh: bool = Query(False)):
+    return get_investors_data(symbol, force_refresh=refresh)
 
 
 # ─── Margin trading (融資融券) ───────────────────────────────────────────────
 
 @app.get("/api/stocks/{symbol}/margin")
-def get_stock_margin(symbol: str):
+def get_stock_margin(symbol: str, refresh: bool = Query(False)):
     """Get 融資融券 (margin/short-sell balance) for Taiwan stocks — last 5 trading days."""
     upper = symbol.upper()
     if not (upper.endswith(".TW") or upper.endswith(".TWO")):
         raise HTTPException(status_code=400, detail="融資融券 only available for Taiwan stocks (.TW / .TWO)")
-    return get_tw_margin_data(symbol)
+    return get_tw_margin_data(symbol, force_refresh=refresh)
 
 
 # ─── Active ETF holdings ─────────────────────────────────────────────────────
@@ -695,10 +812,13 @@ def get_gpt_report():
 def health():
     report_hour   = int(os.getenv("REPORT_HOUR", "17"))
     report_minute = int(os.getenv("REPORT_MINUTE", "0"))
+    data_refresh_hour = int(os.getenv("DATA_REFRESH_HOUR", "18"))
+    data_refresh_minute = int(os.getenv("DATA_REFRESH_MINUTE", "30"))
     return {
         "status": "ok",
         "stocks_analyzed": len(_stock_analyses),
         "email_schedule": f"{report_hour:02d}:{report_minute:02d} Asia/Taipei (Mon-Fri)",
+        "data_refresh_schedule": f"{data_refresh_hour:02d}:{data_refresh_minute:02d} Asia/Taipei (daily)",
         "news_refresh_schedule": "every 5 hours",
         "trump_news_last_updated": get_trump_last_updated(),
     }

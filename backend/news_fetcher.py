@@ -10,7 +10,8 @@ import os
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import requests
 
@@ -71,6 +72,45 @@ def _cache_path(category: str) -> str:
     return os.path.join(CACHE_DIR, f"news_{safe}.json")
 
 
+def _parse_pub_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        parsed = parsedate_to_datetime(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        pass
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _iso_pub_datetime(value: str | None) -> str:
+    parsed = _parse_pub_datetime(value)
+    return parsed.isoformat().replace("+00:00", "Z") if parsed else ""
+
+
+def _article_sort_ts(article: dict) -> float:
+    for key in ("published_at", "pub_date"):
+        parsed = _parse_pub_datetime(article.get(key))
+        if parsed:
+            return parsed.timestamp()
+    return 0.0
+
+
+def _sort_news_newest_first(articles: list[dict]) -> list[dict]:
+    return sorted(articles, key=_article_sort_ts, reverse=True)
+
+
 def _fetch_rss(query: str, hl: str = "zh-TW", gl: str = "TW", max_items: int = 10) -> list[dict]:
     """Fetch articles from Google News RSS. Includes past-month filter and article URLs."""
     encoded = urllib.parse.quote(query)
@@ -97,6 +137,7 @@ def _fetch_rss(query: str, hl: str = "zh-TW", gl: str = "TW", max_items: int = 1
                     "link": link,
                     "source": source,
                     "pub_date": pub_date,
+                    "published_at": _iso_pub_datetime(pub_date),
                     "lang": hl,
                 })
         return items
@@ -113,7 +154,9 @@ def fetch_category_news(category: str, force: bool = False) -> list[dict]:
         if age < NEWS_CACHE_TTL:
             try:
                 with open(path, encoding="utf-8") as f:
-                    return json.load(f)
+                    cached = json.load(f)
+                if isinstance(cached, list):
+                    return _sort_news_newest_first(cached)
             except Exception:
                 pass
 
@@ -126,8 +169,7 @@ def fetch_category_news(category: str, force: bool = False) -> list[dict]:
                 seen_links.add(art["link"])
                 articles.append(art)
 
-    # Sort by pub_date descending (RFC-2822 strings sort reasonably as-is)
-    articles.sort(key=lambda a: a.get("pub_date", ""), reverse=True)
+    articles = _sort_news_newest_first(articles)
 
     try:
         with open(path, "w", encoding="utf-8") as f:

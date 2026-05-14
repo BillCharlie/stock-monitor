@@ -574,14 +574,14 @@ def _fm_request(dataset: str, stock_id: str, start_date: str, end_date: str) -> 
         return []
 
 
-def _fm_three_forces(code: str, days: int = 5) -> list:
+def _fm_three_forces(code: str, days: int = 5, force_refresh: bool = False) -> list:
     """
     FinMind TaiwanStockInstitutionalInvestorsBuySell → 5-day 三大法人 list.
     Returns list of dicts newest-first:
         {date, foreign_net, trust_net, dealer_net, total_net}
     """
     cache_path = os.path.join(CACHE_DIR, f"fm_3f_{code}.json")
-    if os.path.exists(cache_path):
+    if not force_refresh and os.path.exists(cache_path):
         age = time.time() - os.path.getmtime(cache_path)
         if age < INVESTORS_CACHE_TTL:
             try:
@@ -645,7 +645,7 @@ def _fm_three_forces(code: str, days: int = 5) -> list:
     return result
 
 
-def _fm_margin(code: str, days: int = 5) -> list:
+def _fm_margin(code: str, days: int = 5, force_refresh: bool = False) -> list:
     """
     FinMind TaiwanStockMarginPurchaseShortSale → 5-day 融資融券 list.
     Returns list of dicts newest-first:
@@ -653,7 +653,7 @@ def _fm_margin(code: str, days: int = 5) -> list:
          short_sell, short_buy, short_bal, margin_short_ratio}
     """
     cache_path = os.path.join(CACHE_DIR, f"fm_margin_{code}.json")
-    if os.path.exists(cache_path):
+    if not force_refresh and os.path.exists(cache_path):
         age = time.time() - os.path.getmtime(cache_path)
         if age < INVESTORS_CACHE_TTL:
             try:
@@ -702,7 +702,7 @@ def _fm_margin(code: str, days: int = 5) -> list:
 
 # ── TWSE / TPEX direct APIs (fallback only) ──────────────────────────────────
 
-def _twse_three_forces_fallback(code: str) -> list:
+def _twse_three_forces_fallback(code: str, force_refresh: bool = False) -> list:
     """TWSE T86 day-by-day fallback for 三大法人. Returns 5-day list newest-first."""
     result = []
     d = datetime.now()
@@ -712,7 +712,7 @@ def _twse_three_forces_fallback(code: str) -> list:
             date_str   = d.strftime("%Y%m%d")
             cache_path = os.path.join(CACHE_DIR, f"twse_3f_{date_str}.json")
             day_data: dict = {}
-            if os.path.exists(cache_path):
+            if not force_refresh and os.path.exists(cache_path):
                 try:
                     with open(cache_path, encoding="utf-8") as f:
                         day_data = json.load(f)
@@ -760,7 +760,7 @@ def _twse_three_forces_fallback(code: str) -> list:
     return result
 
 
-def _tpex_three_forces_fallback(code: str) -> list:
+def _tpex_three_forces_fallback(code: str, force_refresh: bool = False) -> list:
     """TPEX OTC inst-trading day-by-day fallback for 三大法人. Returns newest-first."""
     result = []
     d = datetime.now()
@@ -770,7 +770,7 @@ def _tpex_three_forces_fallback(code: str) -> list:
             date_str   = d.strftime("%Y%m%d")
             cache_path = os.path.join(CACHE_DIR, f"tpex_3f_{date_str}.json")
             day_data: dict = {}
-            if os.path.exists(cache_path):
+            if not force_refresh and os.path.exists(cache_path):
                 try:
                     with open(cache_path, encoding="utf-8") as f:
                         day_data = json.load(f)
@@ -811,7 +811,7 @@ def _tpex_three_forces_fallback(code: str) -> list:
     return result
 
 
-def _twse_margin_fallback(code: str) -> list:
+def _twse_margin_fallback(code: str, force_refresh: bool = False) -> list:
     """TWSE MI_MARGN day-by-day fallback for 融資融券. Returns newest-first."""
     result = []
     d = datetime.now()
@@ -821,7 +821,7 @@ def _twse_margin_fallback(code: str) -> list:
             date_str   = d.strftime("%Y%m%d")
             cache_path = os.path.join(CACHE_DIR, f"twse_margin_{date_str}.json")
             day_data: dict = {}
-            if os.path.exists(cache_path):
+            if not force_refresh and os.path.exists(cache_path):
                 try:
                     with open(cache_path, encoding="utf-8") as f:
                         day_data = json.load(f)
@@ -866,7 +866,7 @@ def _twse_margin_fallback(code: str) -> list:
     return result
 
 
-def _tpex_margin_fallback(code: str) -> list:
+def _tpex_margin_fallback(code: str, force_refresh: bool = False) -> list:
     """TPEX margin_bal day-by-day fallback for 融資融券. Returns newest-first."""
     result = []
     d = datetime.now()
@@ -876,7 +876,7 @@ def _tpex_margin_fallback(code: str) -> list:
             date_str   = d.strftime("%Y%m%d")
             cache_path = os.path.join(CACHE_DIR, f"tpex_margin_{date_str}.json")
             day_data: dict = {}
-            if os.path.exists(cache_path):
+            if not force_refresh and os.path.exists(cache_path):
                 try:
                     with open(cache_path, encoding="utf-8") as f:
                         day_data = json.load(f)
@@ -924,7 +924,7 @@ def _tpex_margin_fallback(code: str) -> list:
 
 # ── Public interface: 三大法人 ────────────────────────────────────────────────
 
-def _get_tw_investors(symbol: str) -> dict:
+def _get_tw_investors(symbol: str, force_refresh: bool = False) -> dict:
     """
     Return 三大法人 5-day trend for a TW stock.
     Priority: FinMind → TWSE/TPEX direct fallback
@@ -933,13 +933,13 @@ def _get_tw_investors(symbol: str) -> dict:
     is_otc = symbol.upper().endswith(".TWO")
 
     # 1. Try FinMind (works for both TWSE and TPEX)
-    trend = _fm_three_forces(code)
+    trend = _fm_three_forces(code, force_refresh=force_refresh)
 
     # 2. Fallback: direct exchange API
     if not trend:
         logger.info("FinMind 三大法人 empty for %s — trying exchange fallback", symbol)
-        trend = (_tpex_three_forces_fallback(code) if is_otc
-                 else _twse_three_forces_fallback(code))
+        trend = (_tpex_three_forces_fallback(code, force_refresh=force_refresh) if is_otc
+                 else _twse_three_forces_fallback(code, force_refresh=force_refresh))
         for entry in trend:
             if "total_net" not in entry:
                 entry["total_net"] = (
@@ -968,7 +968,7 @@ def _get_tw_investors(symbol: str) -> dict:
 
 # ── Public interface: 融資融券 ────────────────────────────────────────────────
 
-def get_tw_margin_data(symbol: str) -> dict:
+def get_tw_margin_data(symbol: str, force_refresh: bool = False) -> dict:
     """
     Return 融資融券 5-day trend for a TW stock.
     Priority: FinMind → TWSE/TPEX direct fallback
@@ -977,13 +977,13 @@ def get_tw_margin_data(symbol: str) -> dict:
     is_otc = symbol.upper().endswith(".TWO")
 
     # 1. Try FinMind
-    trend = _fm_margin(code)
+    trend = _fm_margin(code, force_refresh=force_refresh)
 
     # 2. Fallback: direct exchange API
     if not trend:
         logger.info("FinMind margin empty for %s — trying exchange fallback", symbol)
-        trend = (_tpex_margin_fallback(code) if is_otc
-                 else _twse_margin_fallback(code))
+        trend = (_tpex_margin_fallback(code, force_refresh=force_refresh) if is_otc
+                 else _twse_margin_fallback(code, force_refresh=force_refresh))
 
     if not trend:
         return {"symbol": symbol, "error": "無融資融券資料（非交易日或資料未更新）"}
@@ -1004,10 +1004,10 @@ def get_tw_margin_data(symbol: str) -> dict:
     }
 
 
-def _get_us_investors(symbol: str) -> dict:
+def _get_us_investors(symbol: str, force_refresh: bool = False) -> dict:
     """Return institutional/retail breakdown for a US stock via yfinance."""
     inv_cache = os.path.join(CACHE_DIR, f"investors_{symbol.upper()}.json")
-    if os.path.exists(inv_cache):
+    if not force_refresh and os.path.exists(inv_cache):
         age = time.time() - os.path.getmtime(inv_cache)
         if age < INVESTORS_CACHE_TTL * 4:  # 4 h cache for US data
             try:
@@ -1076,12 +1076,12 @@ def _get_us_investors(symbol: str) -> dict:
         return {"type": "us", "symbol": symbol, "error": str(e)}
 
 
-def get_investors_data(symbol: str) -> dict:
+def get_investors_data(symbol: str, force_refresh: bool = False) -> dict:
     """Get investor composition data.
     TW → 三大法人 (TWSE or TPEX) + 融資融券; others → yfinance institutional."""
     upper = symbol.upper()
     if upper.endswith(".TW") or upper.endswith(".TWO"):
-        result = _get_tw_investors(symbol)
-        result["margin"] = get_tw_margin_data(symbol)
+        result = _get_tw_investors(symbol, force_refresh=force_refresh)
+        result["margin"] = get_tw_margin_data(symbol, force_refresh=force_refresh)
         return result
-    return _get_us_investors(symbol)
+    return _get_us_investors(symbol, force_refresh=force_refresh)

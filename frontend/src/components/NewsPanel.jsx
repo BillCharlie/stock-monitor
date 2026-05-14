@@ -19,6 +19,17 @@ function parsePubDate(str) {
   }
 }
 
+function getPubTime(article) {
+  const value = article?.published_at || article?.pub_date
+  if (!value) return 0
+  const t = new Date(value).getTime()
+  return Number.isNaN(t) ? 0 : t
+}
+
+function sortNewestFirst(items) {
+  return [...items].sort((a, b) => getPubTime(b) - getPubTime(a))
+}
+
 function NewsCard({ article }) {
   const isEn = article.lang && article.lang.startsWith('en')
   return (
@@ -76,7 +87,7 @@ export default function NewsPanel({ onNeedKey }) {
 
   useEffect(() => { loadNews() }, [loadNews])
 
-  const articles = newsData[activeCategory] || []
+  const articles = sortNewestFirst(newsData[activeCategory] || [])
   const updatedAt = lastUpdated[activeCategory] || ''
 
   return (

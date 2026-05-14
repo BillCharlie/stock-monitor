@@ -56,7 +56,8 @@ export const api = {
 
   getQuote: (symbol) => request(`/stocks/${encodeURIComponent(symbol)}/quote`),
 
-  getInvestors: (symbol) => request(`/stocks/${encodeURIComponent(symbol)}/investors`),
+  getInvestors: (symbol, refresh = false) =>
+    request(`/stocks/${encodeURIComponent(symbol)}/investors${refresh ? '?refresh=true' : ''}`),
 
   getAnalysis: (symbol, name = '') =>
     request(`/stocks/${encodeURIComponent(symbol)}/analysis?name=${encodeURIComponent(name)}`),
