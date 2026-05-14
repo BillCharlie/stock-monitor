@@ -125,4 +125,6 @@ export const api = {
     const qs = params.toString()
     return request(`/etf-holdings/sector-summary${qs ? '?' + qs : ''}`)
   },
+
+  getHealth: () => request('/health'),
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import MarketOverview from './components/MarketOverview.jsx'
 import WatchlistPanel from './components/WatchlistPanel.jsx'
 import StockChart from './components/StockChart.jsx'
@@ -7,7 +7,15 @@ import NewsPanel from './components/NewsPanel.jsx'
 import TrumpNewsPanel from './components/TrumpNewsPanel.jsx'
 import ActiveEtfPanel from './components/ActiveEtfPanel.jsx'
 import AccessKeyPanel from './components/AccessKeyPanel.jsx'
+import { DataStatusPanel } from './components/AnalysisPanel.jsx'
 import { api, keys } from './api/stocks.js'
+
+const FONT_SCALES = [
+  { label: 'S',  scale: 0.85 },
+  { label: 'M',  scale: 1.0  },
+  { label: 'L',  scale: 1.2  },
+  { label: 'XL', scale: 1.4  },
+]
 
 const stockKeyTabs = new Set(['analysis', 'activeEtf'])
 
@@ -22,9 +30,18 @@ export default function App() {
   const [showKeys, setShowKeys] = useState(false)
   const [keyPanelFocus, setKeyPanelFocus] = useState(null)
   const [sidebarW, setSidebarW] = useState(280)
+  const [fontScale, setFontScale] = useState(
+    () => parseFloat(localStorage.getItem('sm_font_scale') || '1')
+  )
   const resizingRef = useRef(false)
   const resizeStartXRef = useRef(0)
   const resizeStartWRef = useRef(0)
+
+  // Apply font scale to :root CSS variable; persisted in localStorage
+  useEffect(() => {
+    document.documentElement.style.setProperty('--font-scale', fontScale)
+    localStorage.setItem('sm_font_scale', fontScale)
+  }, [fontScale])
 
   useEffect(() => {
     const onMove = (e) => {
@@ -136,6 +153,7 @@ export default function App() {
               { id: 'news',     label: '資訊面' },
               { id: 'trumpNews', label: 'TrumpNews' },
               { id: 'activeEtf', label: '主動ETF彙總' },
+              { id: 'dataStatus', label: '數據狀態' },
             ].map(tab => (
               <button
                 key={tab.id}
@@ -173,6 +191,25 @@ export default function App() {
             )}
 
             <div className="ml-auto flex items-center gap-2">
+              {/* Font size adjuster */}
+              <div className="flex gap-0.5 mr-1 items-center">
+                <span className="text-[9px] text-gray-600 mr-0.5">字</span>
+                {FONT_SCALES.map(f => (
+                  <button
+                    key={f.label}
+                    onClick={() => setFontScale(f.scale)}
+                    title={`字體大小 ${f.label}`}
+                    className={`w-6 h-6 rounded text-[10px] font-bold transition-colors ${
+                      fontScale === f.scale
+                        ? 'bg-blue-700 text-white'
+                        : 'text-gray-500 hover:text-white border border-[#333] hover:border-gray-500'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+
               {reportMsg && (
                 <span className={`text-xs ${
                   reportMsg.includes('失敗') || reportMsg.includes('錯誤')
@@ -237,6 +274,9 @@ export default function App() {
             )}
             {activeTab === 'activeEtf' && (
               <ActiveEtfPanel />
+            )}
+            {activeTab === 'dataStatus' && (
+              <DataStatusPanel />
             )}
           </div>
         </div>

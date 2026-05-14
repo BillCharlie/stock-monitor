@@ -1228,3 +1228,232 @@ export default function AnalysisPanel({ symbol, stockName, mode, reportVersion }
   if (mode === 'report') return <DailyReport refreshToken={reportVersion} />
   return <SingleAnalysis symbol={symbol} stockName={stockName} />
 }
+
+// ── DataStatusPanel (exported for App.jsx) ────────────────────────────────────
+function ageMinutes(ts) {
+  if (!ts) return null
+  try {
+    const d = new Date(ts.replace(' ', 'T'))
+    if (isNaN(d)) return null
+    return (Date.now() - d.getTime()) / 60000
+  } catch { return null }
+}
+
+function StatusDot({ ts, errorField }) {
+  if (errorField) return <span className="text-[#EF5350] font-bold">● 錯誤</span>
+  const age = ageMinutes(ts)
+  if (age === null) return <span className="text-gray-600">● 未知</span>
+  if (age < 360)   return <span className="text-[#26A69A] font-bold">● 正常</span>
+  if (age < 2160)  return <span className="text-[#FFA726] font-bold">● 偏舊</span>
+  return                   <span className="text-[#EF5350] font-bold">● 未更新</span>
+}
+
+function StatusAge({ ts }) {
+  const age = ageMinutes(ts)
+  if (!ts || age === null) return <span className="text-gray-700">—</span>
+  // Format: MM-DD HH:mm
+  try {
+    const d = new Date(ts.replace(' ', 'T'))
+    const mm = String(d.getMonth()+1).padStart(2,'0')
+    const dd = String(d.getDate()).padStart(2,'0')
+    const hh = String(d.getHours()).padStart(2,'0')
+    const min = String(d.getMinutes()).padStart(2,'0')
+    const ageH = Math.round(age / 60)
+    const ageLabel = age < 60 ? `${Math.round(age)}分前` : ageH < 48 ? `${ageH}小時前` : `${Math.round(ageH/24)}天前`
+    return (
+      <span>
+        <span className="text-gray-300">{mm}-{dd} {hh}:{min}</span>
+        <span className="text-gray-600 ml-1 text-[9px]">({ageLabel})</span>
+      </span>
+    )
+  } catch { return <span className="text-gray-400">{ts}</span> }
+}
+
+export function DataStatusPanel() {
+  const [health, setHealth] = useState(null)
+  const [etfData, setEtfData] = useState(null)
+  const [newsData, setNewsData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [checkedAt, setCheckedAt] = useState(null)
+
+  const reload = () => {
+    setLoading(true)
+    Promise.allSettled([
+      api.getHealth(),
+      api.getAllEtfHoldings(),
+      api.getNews(),
+    ]).then(([h, etf, news]) => {
+      if (h.status === 'fulfilled')   setHealth(h.value)
+      if (etf.status === 'fulfilled') setEtfData(etf.value)
+      if (news.status === 'fulfilled') setNewsData(news.value)
+      setCheckedAt(new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }))
+      setLoading(false)
+    })
+  }
+
+  useEffect(() => { reload() }, [])
+
+  const rs = health?.refresh_status || {}
+
+  // Determine ETF last_updated: look at per-ETF entries in etfData
+  const etfTs = (() => {
+    if (!etfData) return null
+    const entries = Object.values(etfData)
+    const times = entries.map(e => e.last_updated || e.fetched_at).filter(Boolean)
+    if (!times.length) return null
+    return times.sort().at(-1)   // most recent
+  })()
+
+  // News last_updated: try category last_updated
+  const newsTs = (() => {
+    if (!newsData) return null
+    if (newsData.last_updated) return newsData.last_updated
+    const cats = Object.values(newsData.categories || {})
+    const times = cats.map(c => c.last_updated).filter(Boolean)
+    return times.sort().at(-1) || null
+  })()
+
+  const rows = [
+    {
+      name: '後台服務',
+      source: 'Railway',
+      schedule: '常駐',
+      ts: health ? new Date().toISOString() : null,
+      err: health?.status !== 'ok' ? health?.status : null,
+      extra: health ? `已分析 ${health.stocks_analyzed} 支股票` : null,
+    },
+    {
+      name: '股票分析',
+      source: 'yfinance / FinMind',
+      schedule: '18:30 每日',
+      ts: rs.evening_data_refresh?.last_updated,
+      err: rs.evening_data_refresh?.error,
+      extra: (() => {
+        const s = rs.evening_data_refresh
+        if (!s) return null
+        const parts = []
+        if (s.ok != null) parts.push(`✅ ${s.ok}支`)
+        if (s.errors != null) parts.push(`❌ ${s.errors}支`)
+        if (s.duration_seconds != null) parts.push(`耗時 ${s.duration_seconds}s`)
+        return parts.join('  ')
+      })(),
+    },
+    {
+      name: 'ETF持倉',
+      source: '公開資訊觀測站',
+      schedule: '15:00 每日',
+      ts: rs.etf_holdings?.last_updated || etfTs,
+      err: rs.etf_holdings?.error,
+      extra: rs.etf_holdings
+        ? `✅ ${rs.etf_holdings.ok ?? '?'}支 / ❌ ${rs.etf_holdings.errors ?? '?'}支`
+        : null,
+    },
+    {
+      name: 'Trump新聞',
+      source: 'NewsAPI',
+      schedule: '每5小時',
+      ts: health?.trump_news_last_updated,
+      err: null,
+      extra: null,
+    },
+    {
+      name: '一般新聞',
+      source: 'NewsAPI',
+      schedule: '每5小時',
+      ts: newsTs,
+      err: null,
+      extra: null,
+    },
+    {
+      name: '資料健康報告',
+      source: '內部監控',
+      schedule: '19:00 每日',
+      ts: rs.data_health_check?.last_updated,
+      err: rs.data_health_check?.error,
+      extra: (() => {
+        const d = rs.data_health_check
+        if (!d) return null
+        if (d.summary_counts) {
+          const c = d.summary_counts
+          return `正常 ${c.ok ?? 0} / 警告 ${c.warning ?? 0} / 錯誤 ${c.error ?? 0}`
+        }
+        return d.status_label || null
+      })(),
+    },
+  ]
+
+  return (
+    <div className="p-4 overflow-y-auto h-full">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <div className="text-lg font-bold text-white">數據狀態監控</div>
+          <div className="text-xs text-gray-500">各模組資料抓取時效確認（非即時數值）</div>
+        </div>
+        <div className="flex items-center gap-3">
+          {checkedAt && <span className="text-[10px] text-gray-600">最後檢查 {checkedAt}</span>}
+          <button
+            onClick={reload}
+            disabled={loading}
+            className="px-3 py-1 text-xs bg-[#1A2A1A] hover:bg-[#223322] text-green-400 rounded border border-[#2A3A2A] disabled:opacity-40 transition-colors"
+          >
+            {loading ? '更新中...' : '↻ 重新檢查'}
+          </button>
+        </div>
+      </div>
+
+      {loading && !health ? (
+        <div className="text-gray-500 text-sm py-8 text-center">載入中...</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="text-gray-500 border-b border-[#2A2A2A]">
+                <th className="text-left py-2 pr-4 font-medium">模組</th>
+                <th className="text-left py-2 pr-4 font-medium">資料來源</th>
+                <th className="text-left py-2 pr-4 font-medium">排程</th>
+                <th className="text-left py-2 pr-4 font-medium">最後更新</th>
+                <th className="text-left py-2 pr-4 font-medium">狀態</th>
+                <th className="text-left py-2 font-medium">備註</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => (
+                <tr key={row.name} className="border-b border-[#1A1A1A] hover:bg-[#141414]">
+                  <td className="py-2.5 pr-4 font-semibold text-gray-200">{row.name}</td>
+                  <td className="py-2.5 pr-4 text-gray-500">{row.source}</td>
+                  <td className="py-2.5 pr-4 text-gray-400 font-mono">{row.schedule}</td>
+                  <td className="py-2.5 pr-4 font-mono text-sm">
+                    <StatusAge ts={row.ts} />
+                  </td>
+                  <td className="py-2.5 pr-4 text-sm">
+                    <StatusDot ts={row.ts} errorField={row.err} />
+                  </td>
+                  <td className="py-2.5 text-[10px] text-gray-600">{row.extra || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Raw refresh_status detail */}
+      {health && Object.keys(rs).length > 0 && (
+        <details className="mt-6">
+          <summary className="text-xs text-gray-600 cursor-pointer hover:text-gray-400">
+            ▶ 原始排程日誌
+          </summary>
+          <div className="mt-2 space-y-2">
+            {Object.entries(rs).map(([key, val]) => (
+              <div key={key} className="bg-[#111] rounded p-2 text-[10px]">
+                <div className="text-gray-400 font-semibold mb-1">{key}</div>
+                <pre className="text-gray-600 whitespace-pre-wrap font-mono">
+                  {JSON.stringify(val, null, 2)}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  )
+}
