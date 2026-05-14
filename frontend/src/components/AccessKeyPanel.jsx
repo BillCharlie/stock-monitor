@@ -1,13 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { keys, api } from '../api/stocks.js'
 
-function KeyRow({ label, hint, value, onChange, onSave, onClear, status, msg }) {
+function KeyRow({ label, hint, value, onChange, onSave, onClear, status, msg, inputRef }) {
   const loading = status === 'loading'
   return (
     <div className="mb-5">
       <label className="block text-gray-400 text-xs mb-1">{label}</label>
       <input
         type="password"
+        ref={inputRef}
         value={value}
         onChange={e => onChange(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && onSave()}
@@ -40,13 +41,26 @@ function KeyRow({ label, hint, value, onChange, onSave, onClear, status, msg }) 
   )
 }
 
-export default function AccessKeyPanel({ onClose }) {
+export default function AccessKeyPanel({ onClose, initialFocus = null }) {
   const [reportKey, setReportKey] = useState(keys.getReport())
   const [stockKey,  setStockKey]  = useState(keys.getStock())
   const [reportStatus, setReportStatus] = useState('')
   const [reportMsg,    setReportMsg]    = useState('')
   const [stockStatus,  setStockStatus]  = useState('')
   const [stockMsg,     setStockMsg]     = useState('')
+  const reportInputRef = useRef(null)
+  const stockInputRef = useRef(null)
+
+  useEffect(() => {
+    const input = initialFocus === 'report'
+      ? reportInputRef.current
+      : initialFocus === 'stock'
+        ? stockInputRef.current
+        : null
+    if (!input) return
+    input.focus()
+    input.select()
+  }, [initialFocus])
 
   const handleSave = async (type) => {
     const isReport = type === 'report'
@@ -110,17 +124,19 @@ export default function AccessKeyPanel({ onClose }) {
           onClear={() => handleClear('report')}
           status={reportStatus}
           msg={reportMsg}
+          inputRef={reportInputRef}
         />
 
         <KeyRow
           label="股票管理密鑰"
-          hint="用於「新增/刪除自選股票」"
+          hint="用於「新增/刪除自選股票」、「個股分析」與「主動ETF彙總」"
           value={stockKey}
           onChange={setStockKey}
           onSave={() => handleSave('stock')}
           onClear={() => handleClear('stock')}
           status={stockStatus}
           msg={stockMsg}
+          inputRef={stockInputRef}
         />
       </div>
     </div>

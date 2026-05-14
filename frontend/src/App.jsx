@@ -9,6 +9,8 @@ import ActiveEtfPanel from './components/ActiveEtfPanel.jsx'
 import AccessKeyPanel from './components/AccessKeyPanel.jsx'
 import { api, keys } from './api/stocks.js'
 
+const stockKeyTabs = new Set(['analysis', 'activeEtf'])
+
 export default function App() {
   const [selected, setSelected] = useState({ symbol: '2330.TW', name: '台積電' })
   const [interval, setInterval] = useState('1d')
@@ -18,6 +20,7 @@ export default function App() {
   const [hasPdf, setHasPdf] = useState(false)
   const [reportVersion, setReportVersion] = useState(0)
   const [showKeys, setShowKeys] = useState(false)
+  const [keyPanelFocus, setKeyPanelFocus] = useState(null)
   const [sidebarW, setSidebarW] = useState(280)
   const resizingRef = useRef(false)
   const resizeStartXRef = useRef(0)
@@ -56,9 +59,28 @@ export default function App() {
   const keyStatus = hasReportKey && hasStockKey ? 'both'
     : hasReportKey || hasStockKey ? 'partial' : 'none'
 
+  const openKeyPanel = (focus = null) => {
+    setKeyPanelFocus(focus)
+    setShowKeys(true)
+  }
+
+  const closeKeyPanel = () => {
+    setShowKeys(false)
+    setKeyPanelFocus(null)
+  }
+
+  const handleTabClick = (tabId) => {
+    if (stockKeyTabs.has(tabId) && !keys.getStock().trim()) {
+      setReportMsg('請先輸入股票管理密鑰')
+      openKeyPanel('stock')
+      return
+    }
+    setActiveTab(tabId)
+  }
+
   const handleGenerate = async () => {
     if (!keys.getReport()) {
-      setShowKeys(true)
+      openKeyPanel('report')
       setReportMsg('請先設定報告生成密鑰')
       return
     }
@@ -75,7 +97,7 @@ export default function App() {
     } catch (e) {
       if (e.message.includes('401') || e.message.includes('密鑰')) {
         setReportMsg('密鑰錯誤，請重新設定')
-        setShowKeys(true)
+        openKeyPanel('report')
       } else {
         setReportMsg('生成失敗：' + e.message)
       }
@@ -96,7 +118,7 @@ export default function App() {
               setActiveTab('chart')
             }}
             selectedSymbol={selected.symbol}
-            onNeedKey={() => setShowKeys(true)}
+            onNeedKey={() => openKeyPanel('stock')}
           />
           <div
             className="absolute right-0 top-0 w-1.5 h-full cursor-col-resize hover:bg-blue-500/20 active:bg-blue-500/40 z-10"
@@ -113,11 +135,11 @@ export default function App() {
               { id: 'report',   label: '每日報告' },
               { id: 'news',     label: '資訊面' },
               { id: 'trumpNews', label: 'TrumpNews' },
-              { id: 'activeEtf', label: '主動ETF' },
+              { id: 'activeEtf', label: '主動ETF彙總' },
             ].map(tab => (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => handleTabClick(tab.id)}
                 className={`px-3 py-1 rounded text-xs transition-colors ${
                   activeTab === tab.id
                     ? 'bg-blue-700 text-white'
@@ -152,7 +174,13 @@ export default function App() {
 
             <div className="ml-auto flex items-center gap-2">
               {reportMsg && (
-                <span className={`text-xs ${reportMsg.includes('失敗') || reportMsg.includes('錯誤') ? 'text-red-400' : 'text-green-400'}`}>
+                <span className={`text-xs ${
+                  reportMsg.includes('失敗') || reportMsg.includes('錯誤')
+                    ? 'text-red-400'
+                    : reportMsg.includes('請先')
+                      ? 'text-yellow-400'
+                      : 'text-green-400'
+                }`}>
                   {reportMsg}
                 </span>
               )}
@@ -178,7 +206,7 @@ export default function App() {
 
               {/* Key settings button */}
               <button
-                onClick={() => setShowKeys(true)}
+                onClick={() => openKeyPanel()}
                 title="設定存取密鑰"
                 className={`w-7 h-7 rounded flex items-center justify-center text-sm transition-colors border ${
                   keyStatus === 'both'    ? 'border-green-700 text-green-400 hover:bg-green-900/30' :
@@ -202,10 +230,10 @@ export default function App() {
               <AnalysisPanel symbol={selected.symbol} stockName={selected.name} mode="report" reportVersion={reportVersion} />
             )}
             {activeTab === 'news' && (
-              <NewsPanel onNeedKey={() => setShowKeys(true)} />
+              <NewsPanel onNeedKey={() => openKeyPanel('report')} />
             )}
             {activeTab === 'trumpNews' && (
-              <TrumpNewsPanel onNeedKey={() => setShowKeys(true)} />
+              <TrumpNewsPanel onNeedKey={() => openKeyPanel('report')} />
             )}
             {activeTab === 'activeEtf' && (
               <ActiveEtfPanel />
@@ -214,7 +242,7 @@ export default function App() {
         </div>
       </div>
 
-      {showKeys && <AccessKeyPanel onClose={() => setShowKeys(false)} />}
+      {showKeys && <AccessKeyPanel onClose={closeKeyPanel} initialFocus={keyPanelFocus} />}
     </div>
   )
 }
