@@ -20,6 +20,31 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = os.path.join(os.getenv("DATA_DIR", os.path.dirname(__file__)), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+
+def _time_text(dt: datetime | None = None) -> str:
+    return (dt or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _mtime_text(path: str) -> str:
+    try:
+        return _time_text(datetime.fromtimestamp(os.path.getmtime(path)))
+    except Exception:
+        return ""
+
+
+def _latest_mtime_text(paths: list[str]) -> str:
+    mtimes = []
+    for path in paths:
+        try:
+            if os.path.exists(path):
+                mtimes.append(os.path.getmtime(path))
+        except Exception:
+            continue
+    if not mtimes:
+        return ""
+    return _time_text(datetime.fromtimestamp(max(mtimes)))
+
+
 # ─── Bulk quote cache (TWSE + TPEX) ──────────────────────────────────────────
 # One API call fetches ALL stocks; we cache for 5 min and serve individual lookups
 _bulk_cache: dict = {"twse": {}, "tpex": {}, "twse_ts": 0.0, "tpex_ts": 0.0}
@@ -152,6 +177,11 @@ INTERVAL_PERIOD = {
 def _cache_path(symbol: str, interval: str, period: str) -> str:
     key = hashlib.md5(f"{symbol}_{interval}_{period}".encode()).hexdigest()
     return os.path.join(CACHE_DIR, f"{key}.json")
+
+
+def get_ohlcv_last_updated(symbol: str, interval: str = "1d") -> str:
+    period = INTERVAL_PERIOD.get(interval, "5y")
+    return _mtime_text(_cache_path(symbol, interval, period))
 
 
 def _load_cache(path: str, ttl: int) -> pd.DataFrame | None:
@@ -472,6 +502,13 @@ def get_quote(symbol: str) -> dict:
     upper = symbol.upper()
     is_tw = upper.endswith(".TW") or upper.endswith(".TWO")
 
+    def with_update(data: dict) -> dict:
+        if not data:
+            return data
+        out = dict(data)
+        out["last_updated"] = _time_text()
+        return out
+
     # ── Step 1: yfinance (primary for ALL symbols) ────────────────────────────
     try:
         t  = yf.Ticker(symbol)
@@ -483,12 +520,12 @@ def get_quote(symbol: str) -> dict:
             change_pct = (change / prev_close * 100) if prev_close else 0
             volume     = int(df["Volume"].iloc[-1]) if "Volume" in df.columns else 0
             logger.info("yfinance quote OK for %s: %.2f", symbol, close)
-            return {
+            return with_update({
                 "price":      round(close, 4),
                 "change":     round(change, 4),
                 "change_pct": round(change_pct, 2),
                 "volume":     volume,
-            }
+            })
         logger.warning("yfinance history empty for %s", symbol)
     except Exception as e:
         logger.warning("yfinance quote failed for %s: %s", symbol, e)
@@ -501,19 +538,19 @@ def get_quote(symbol: str) -> dict:
     logger.info("yfinance failed for %s, trying bulk TWSE/TPEX...", symbol)
     q = _get_tw_bulk_quote(symbol)
     if q:
-        return q
+        return with_update(q)
 
     # ── TW Step 3: MIS real-time ──────────────────────────────────────────────
     logger.info("Bulk failed for %s, trying MIS real-time...", symbol)
     q = _get_tw_mis_quote(symbol)
     if q:
-        return q
+        return with_update(q)
 
     # ── TW Step 4: TWSE/TPEX monthly (fixed date) ────────────────────────────
     logger.info("MIS failed for %s, trying TWSE monthly...", symbol)
     q = _get_tw_quote_from_twse(symbol)
     if q:
-        return q
+        return with_update(q)
 
     return {}
 
@@ -953,11 +990,16 @@ def _get_tw_investors(symbol: str, force_refresh: bool = False) -> dict:
                 "error": "無三大法人資料（非交易日或資料未更新）"}
 
     latest = trend[0]   # newest
+    data_updated_at = _latest_mtime_text([
+        os.path.join(CACHE_DIR, f"fm_3f_{code}.json"),
+        os.path.join(CACHE_DIR, f"{'tpex' if is_otc else 'twse'}_3f_{latest['date'].replace('-', '')}.json"),
+    ]) or _time_text()
     return {
         "type":        "tw",
         "market":      "OTC" if is_otc else "TWSE",
         "symbol":      symbol,
         "latest_date": latest["date"],
+        "last_updated": data_updated_at,
         "foreign_net": latest["foreign_net"],
         "trust_net":   latest["trust_net"],
         "dealer_net":  latest["dealer_net"],
@@ -989,10 +1031,15 @@ def get_tw_margin_data(symbol: str, force_refresh: bool = False) -> dict:
         return {"symbol": symbol, "error": "無融資融券資料（非交易日或資料未更新）"}
 
     latest = trend[0]
+    data_updated_at = _latest_mtime_text([
+        os.path.join(CACHE_DIR, f"fm_margin_{code}.json"),
+        os.path.join(CACHE_DIR, f"{'tpex' if is_otc else 'twse'}_margin_{latest['date'].replace('-', '')}.json"),
+    ]) or _time_text()
     return {
         "symbol":             symbol,
         "market":             "OTC" if is_otc else "TWSE",
         "latest_date":        latest["date"],
+        "last_updated":       data_updated_at,
         "margin_buy":         latest["margin_buy"],
         "margin_sell":        latest["margin_sell"],
         "margin_bal":         latest["margin_bal"],
@@ -1012,7 +1059,9 @@ def _get_us_investors(symbol: str, force_refresh: bool = False) -> dict:
         if age < INVESTORS_CACHE_TTL * 4:  # 4 h cache for US data
             try:
                 with open(inv_cache, encoding="utf-8") as f:
-                    return json.load(f)
+                    cached = json.load(f)
+                cached["last_updated"] = cached.get("last_updated") or _mtime_text(inv_cache)
+                return cached
             except Exception:
                 pass
 
@@ -1027,6 +1076,7 @@ def _get_us_investors(symbol: str, force_refresh: bool = False) -> dict:
         result: dict = {
             "type": "us",
             "symbol": symbol,
+            "last_updated": _time_text(),
             "held_pct_insiders":     info.get("heldPercentInsiders"),
             "held_pct_institutions": info.get("heldPercentInstitutions"),
             "float_shares":          info.get("floatShares"),
@@ -1082,6 +1132,12 @@ def get_investors_data(symbol: str, force_refresh: bool = False) -> dict:
     upper = symbol.upper()
     if upper.endswith(".TW") or upper.endswith(".TWO"):
         result = _get_tw_investors(symbol, force_refresh=force_refresh)
-        result["margin"] = get_tw_margin_data(symbol, force_refresh=force_refresh)
+        margin = get_tw_margin_data(symbol, force_refresh=force_refresh)
+        result["margin"] = margin
+        result["margin_last_updated"] = margin.get("last_updated")
+        result["last_updated"] = _latest_mtime_text([
+            os.path.join(CACHE_DIR, f"fm_3f_{symbol.split('.')[0]}.json"),
+            os.path.join(CACHE_DIR, f"fm_margin_{symbol.split('.')[0]}.json"),
+        ]) or result.get("last_updated") or margin.get("last_updated") or _time_text()
         return result
     return _get_us_investors(symbol, force_refresh=force_refresh)

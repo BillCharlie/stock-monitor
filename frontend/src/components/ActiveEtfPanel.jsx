@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/stocks.js'
+import { UpdateTime } from '../utils/time.jsx'
 
 const CHANGE_LABELS = {
   day: '1日',
@@ -328,6 +329,7 @@ export default function ActiveEtfPanel() {
             前端 Canvas 互動饼圖，股票型主動式ETF等權彙整
             {summary?.date ? `，最新持股日 ${summary.date}` : ''}
           </div>
+          <UpdateTime value={summary?.last_updated || summary?.generated_at} />
         </div>
         <div className="ml-auto flex items-center gap-2">
           {loading && <span className="text-[10px] text-blue-400">載入中...</span>}

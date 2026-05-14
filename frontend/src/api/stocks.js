@@ -118,6 +118,11 @@ export const api = {
   getAllEtfHoldings: (refresh = false) =>
     request(`/etf-holdings${refresh ? '?refresh=true' : ''}`),
 
-  getEtfSectorSummary: (refresh = false) =>
-    request(`/etf-holdings/sector-summary${refresh ? '?refresh=true' : ''}`),
+  getEtfSectorSummary: (refresh = false, holdingsRefresh = refresh) => {
+    const params = new URLSearchParams()
+    if (refresh) params.set('refresh', 'true')
+    if (holdingsRefresh) params.set('holdings_refresh', 'true')
+    const qs = params.toString()
+    return request(`/etf-holdings/sector-summary${qs ? '?' + qs : ''}`)
+  },
 }

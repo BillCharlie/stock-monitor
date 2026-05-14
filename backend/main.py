@@ -35,7 +35,7 @@ from indicators import (
     calculate_rsi,
     series_to_list,
 )
-from stock_data import df_to_ohlcv_list, get_investors_data, get_ohlcv, get_quote, get_tw_margin_data
+from stock_data import df_to_ohlcv_list, get_investors_data, get_ohlcv, get_ohlcv_last_updated, get_quote, get_tw_margin_data
 from watchlist import MARKET_INDICES, WATCHLIST
 from etf_holdings import (
     fetch_etf_holdings,
@@ -60,11 +60,37 @@ os.makedirs(_DATA_DIR, exist_ok=True)
 CUSTOM_STOCKS_FILE    = os.path.join(_DATA_DIR, "custom_stocks.json")
 USER_WATCHLIST_FILE   = os.path.join(_DATA_DIR, "user_watchlist.json")
 STATIC_DIR            = os.path.join(_BASE_DIR, "static")
+REFRESH_STATUS_FILE   = os.path.join(_DATA_DIR, "refresh_status.json")
 
 # ─── In-memory caches ─────────────────────────────────────────────────────────
 _daily_report: dict = {}
 _stock_analyses: dict = {}
 _etf_holdings: dict = {}          # populated by 15:00 scheduler job
+
+
+def _server_time_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _write_refresh_status(kind: str, payload: dict) -> None:
+    try:
+        status = {}
+        if os.path.exists(REFRESH_STATUS_FILE):
+            with open(REFRESH_STATUS_FILE, encoding="utf-8") as f:
+                status = json.load(f)
+        status[kind] = {"last_updated": _server_time_text(), **payload}
+        with open(REFRESH_STATUS_FILE, "w", encoding="utf-8") as f:
+            json.dump(status, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning("Failed to write refresh status: %s", e)
+
+
+def _read_refresh_status() -> dict:
+    try:
+        with open(REFRESH_STATUS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def load_custom_stocks() -> list:
@@ -179,8 +205,10 @@ def _run_etf_holdings_refresh():
         logger.info("ETF holdings refresh done: %d OK, %d errors", ok, err)
         fetch_etf_sector_summary(force_refresh=True, holdings_refresh=False)
         logger.info("ETF sector summary snapshot refreshed.")
+        _write_refresh_status("etf_holdings", {"ok": ok, "errors": err, "schedule": "15:00 Asia/Taipei"})
     except Exception as e:
         logger.error("ETF holdings refresh failed: %s", e)
+        _write_refresh_status("etf_holdings", {"error": str(e), "schedule": "15:00 Asia/Taipei"})
 
 
 def _iter_stock_items(node):
@@ -285,6 +313,10 @@ def _run_evening_data_refresh():
 
     _stock_analyses.clear()
     summary["duration_seconds"] = round(time.time() - start, 1)
+    _write_refresh_status("evening_data_refresh", {
+        **summary,
+        "schedule": "18:30 Asia/Taipei",
+    })
     logger.info("18:30 data refresh complete: %s", summary)
     return summary
 
@@ -537,6 +569,7 @@ def get_kline(
     return {
         "symbol": symbol,
         "interval": interval,
+        "last_updated": get_ohlcv_last_updated(symbol, interval) or _server_time_text(),
         "data": df_to_ohlcv_list(df),
         "indicators": {
             "MA5":       series_to_list(mas["MA5"], dates),
@@ -560,14 +593,19 @@ def get_kline(
 
 @app.get("/api/stocks/{symbol}/quote")
 def get_stock_quote(symbol: str):
-    return get_quote(symbol)
+    data = get_quote(symbol)
+    if data and not data.get("last_updated"):
+        data["last_updated"] = _server_time_text()
+    return data
 
 
 # ─── Investor / institutional data ────────────────────────────────────────────
 
 @app.get("/api/stocks/{symbol}/investors")
 def get_stock_investors(symbol: str, refresh: bool = Query(False)):
-    return get_investors_data(symbol, force_refresh=refresh)
+    data = get_investors_data(symbol, force_refresh=refresh)
+    data["last_updated"] = data.get("last_updated") or _server_time_text()
+    return data
 
 
 # ─── Margin trading (融資融券) ───────────────────────────────────────────────
@@ -578,7 +616,9 @@ def get_stock_margin(symbol: str, refresh: bool = Query(False)):
     upper = symbol.upper()
     if not (upper.endswith(".TW") or upper.endswith(".TWO")):
         raise HTTPException(status_code=400, detail="融資融券 only available for Taiwan stocks (.TW / .TWO)")
-    return get_tw_margin_data(symbol, force_refresh=refresh)
+    data = get_tw_margin_data(symbol, force_refresh=refresh)
+    data["last_updated"] = data.get("last_updated") or _server_time_text()
+    return data
 
 
 # ─── Active ETF holdings ─────────────────────────────────────────────────────
@@ -595,7 +635,10 @@ def get_all_etf_holdings(refresh: bool = False):
 @app.get("/api/etf-holdings/sector-summary")
 def get_etf_sector_summary(refresh: bool = False, holdings_refresh: bool = False):
     """Return sector-level active ETF summary with frontend pie-chart geometry."""
-    return fetch_etf_sector_summary(force_refresh=refresh, holdings_refresh=holdings_refresh)
+    return fetch_etf_sector_summary(
+        force_refresh=refresh,
+        holdings_refresh=holdings_refresh or refresh,
+    )
 
 
 @app.get("/api/etf-holdings/{symbol}")
@@ -604,7 +647,9 @@ def get_single_etf_holdings(symbol: str, refresh: bool = False):
     code = symbol.upper().replace(".TW", "")
     if code not in ACTIVE_ETFS:
         raise HTTPException(status_code=404, detail=f"{symbol} 不在主動式ETF清單中")
-    return fetch_etf_holdings(code, force_refresh=refresh)
+    data = fetch_etf_holdings(code, force_refresh=refresh)
+    data["last_updated"] = data.get("last_updated") or data.get("fetched_at") or _server_time_text()
+    return data
 
 
 # ─── Real-time quote (for intraday updates) ──────────────────────────────────
@@ -737,8 +782,11 @@ def get_stock_institutions(symbol: str):
 @app.get("/api/stocks/{symbol}/analysis")
 def get_stock_analysis(symbol: str, name: Optional[str] = ""):
     if symbol in _stock_analyses:
-        return _stock_analyses[symbol]
+        cached = _stock_analyses[symbol]
+        cached["last_updated"] = cached.get("last_updated") or cached.get("generated_at") or _server_time_text()
+        return cached
     result = analyze_stock(symbol, name or "")
+    result["last_updated"] = result.get("last_updated") or result.get("generated_at") or _server_time_text()
     _stock_analyses[symbol] = result
     return result
 
@@ -751,7 +799,8 @@ def get_market_overview():
     for idx in MARKET_INDICES:
         q = get_quote(idx["symbol"])
         results.append({"symbol": idx["symbol"], "name": idx["name"], "name_en": idx["name_en"], **q})
-    return {"indices": results}
+    latest = max((r.get("last_updated", "") for r in results), default="")
+    return {"indices": results, "last_updated": latest or _server_time_text()}
 
 
 # ─── Daily report ─────────────────────────────────────────────────────────────
@@ -821,6 +870,7 @@ def health():
         "data_refresh_schedule": f"{data_refresh_hour:02d}:{data_refresh_minute:02d} Asia/Taipei (daily)",
         "news_refresh_schedule": "every 5 hours",
         "trump_news_last_updated": get_trump_last_updated(),
+        "refresh_status": _read_refresh_status(),
     }
 
 

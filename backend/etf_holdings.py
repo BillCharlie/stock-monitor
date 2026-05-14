@@ -67,6 +67,30 @@ SECTOR_CHANGE_PERIODS = {
     "year": 365,
 }
 
+
+def _time_text(dt: datetime | None = None) -> str:
+    return (dt or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _mtime_text(path: str) -> str:
+    try:
+        return _time_text(datetime.fromtimestamp(os.path.getmtime(path)))
+    except Exception:
+        return ""
+
+
+def _with_last_updated(result: dict, path: str | None = None) -> dict:
+    if not isinstance(result, dict):
+        return result
+    result["last_updated"] = (
+        result.get("last_updated")
+        or result.get("fetched_at")
+        or result.get("generated_at")
+        or (_mtime_text(path) if path else "")
+        or _time_text()
+    )
+    return result
+
 TWSE_COMPANY_URL = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
 TPEX_COMPANY_URL = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
 
@@ -1157,6 +1181,7 @@ def _build_active_etf_sector_payload(
     payload = {
         "date": latest_date or datetime.now().strftime("%Y-%m-%d"),
         "generated_at": datetime.now().isoformat(),
+        "last_updated": _time_text(),
         "history_method_version": ETF_SECTOR_HISTORY_VERSION,
         "method": "各股票型主動式ETF持股權重直接加總，再按全部持股權重換算產業占比；未依ETF規模加權。",
         "stock_etf_count": stock_etf_count,
@@ -1347,7 +1372,7 @@ def fetch_etf_sector_summary(force_refresh: bool = False, holdings_refresh: bool
                 and all(key in cached_periods for key in SECTOR_CHANGE_PERIODS)
                 and not has_start_zero
             ):
-                return cached
+                return _with_last_updated(cached, summary_cache)
 
     all_holdings = fetch_all_etf_holdings(force_refresh=holdings_refresh)
     payload = _build_active_etf_sector_payload(all_holdings, top_n=20, include_chart=True)
@@ -1369,6 +1394,7 @@ def fetch_etf_sector_summary(force_refresh: bool = False, holdings_refresh: bool
     snapshot = _sector_summary_snapshot(payload)
     date_key = _date_only(payload.get("date")) or datetime.now().strftime("%Y-%m-%d")
     _save_json(_sector_snapshot_path(date_key), snapshot)
+    _with_last_updated(payload)
     _save_json(summary_cache, payload)
     return payload
 
@@ -1517,18 +1543,49 @@ def compute_changes(prev_result: dict, curr_result: dict) -> dict:
 
     new_positions, exited, increased, decreased, unchanged_count = [], [], [], [], 0
 
+    def _change_abs(row: dict) -> float:
+        val = row.get("shares_delta")
+        if val is None:
+            val = row.get("weight_delta")
+        try:
+            return abs(float(val))
+        except Exception:
+            return 0.0
+
     for sc, curr in curr_map.items():
         if sc not in prev_map:
             new_positions.append(curr)
         else:
             prev = prev_map[sc]
-            cs = curr.get("shares") or 0
-            ps = prev.get("shares") or 0
-            delta = cs - ps
-            if delta > 0:
-                increased.append({**curr, "shares_delta": delta, "prev_shares": ps})
-            elif delta < 0:
-                decreased.append({**curr, "shares_delta": delta, "prev_shares": ps})
+            cs = curr.get("shares")
+            ps = prev.get("shares")
+            if cs is not None and ps is not None:
+                delta = int(cs or 0) - int(ps or 0)
+                if delta > 0:
+                    increased.append({**curr, "shares_delta": delta, "prev_shares": ps, "change_basis": "shares"})
+                elif delta < 0:
+                    decreased.append({**curr, "shares_delta": delta, "prev_shares": ps, "change_basis": "shares"})
+                else:
+                    unchanged_count += 1
+                continue
+
+            cw = _as_float(curr.get("weight_pct"))
+            pw = _as_float(prev.get("weight_pct"))
+            weight_delta = round(cw - pw, 4)
+            if weight_delta > 0.005:
+                increased.append({
+                    **curr,
+                    "weight_delta": weight_delta,
+                    "prev_weight_pct": pw,
+                    "change_basis": "weight",
+                })
+            elif weight_delta < -0.005:
+                decreased.append({
+                    **curr,
+                    "weight_delta": weight_delta,
+                    "prev_weight_pct": pw,
+                    "change_basis": "weight",
+                })
             else:
                 unchanged_count += 1
 
@@ -1537,10 +1594,11 @@ def compute_changes(prev_result: dict, curr_result: dict) -> dict:
             exited.append(prev_map[sc])
 
     # Sort by absolute delta size
-    increased.sort(key=lambda x: abs(x["shares_delta"]), reverse=True)
-    decreased.sort(key=lambda x: abs(x["shares_delta"]), reverse=True)
+    increased.sort(key=_change_abs, reverse=True)
+    decreased.sort(key=_change_abs, reverse=True)
 
     return {
+        "available":       True,
         "new_positions":   new_positions,
         "exited":          exited,
         "increased":       increased,
@@ -1583,7 +1641,26 @@ def fetch_etf_holdings(etf_code: str, force_refresh: bool = False) -> dict:
                     if first_holding and "sector" not in first_holding:
                         logger.debug("%s cache missing sector field, enriching...", code_upper)
                         cached = _refresh_result_enrichment(cached)
-                return cached
+                    if not cached.get("changes") or (cached.get("changes") or {}).get("available") is False:
+                        prev_data = _load_json(prev_p)
+                        change_source = "local_prev_snapshot"
+                        if not prev_data.get("holdings"):
+                            curr_dt = _parse_date_key(cached.get("date"))
+                            if curr_dt:
+                                target_dt = curr_dt - timedelta(days=1)
+                                prev_data = (
+                                    _load_cached_holdings_near_target(code_upper, target_dt)
+                                    or _fetch_goal_star_nearest_holdings(code_upper, target_dt)
+                                    or {}
+                                )
+                                if prev_data.get("holdings"):
+                                    change_source = prev_data.get("source") or "historical_holdings"
+                                    _save_json(prev_p, prev_data)
+                        if prev_data.get("holdings") and prev_data.get("date") != cached.get("date"):
+                            cached["changes"] = compute_changes(prev_data, cached)
+                            cached["changes"]["source"] = change_source
+                            _save_json(curr_p, cached)
+                return _with_last_updated(cached, curr_p)
 
     name     = ACTIVE_ETFS.get(code_upper, code_upper)
     etf_type = "bond" if code_upper.endswith("D") else "stock"
@@ -1606,6 +1683,7 @@ def fetch_etf_holdings(etf_code: str, force_refresh: bool = False) -> dict:
             "fetched_at":     datetime.now().isoformat(),
             "error":          "無法取得投資組合（MoneyDJ + etfinfo 均失敗）",
         }
+        _with_last_updated(result)
         _save_json(curr_p, result)
         return result
 
@@ -1641,11 +1719,38 @@ def fetch_etf_holdings(etf_code: str, force_refresh: bool = False) -> dict:
 
     # Attach change summary if we have a previous snapshot with share data
     prev_data = _load_json(prev_p)
-    if prev_data.get("holdings"):
-        result["changes"] = compute_changes(prev_data, result)
-    else:
-        result["changes"] = None
+    change_source = "local_prev_snapshot"
 
+    if not prev_data.get("holdings"):
+        curr_dt = _parse_date_key(date_str)
+        if curr_dt:
+            target_dt = curr_dt - timedelta(days=1)
+            prev_data = (
+                _load_cached_holdings_near_target(code_upper, target_dt)
+                or _fetch_goal_star_nearest_holdings(code_upper, target_dt)
+                or {}
+            )
+            if prev_data.get("holdings"):
+                change_source = prev_data.get("source") or "historical_holdings"
+                _save_json(prev_p, prev_data)
+
+    if prev_data.get("holdings") and prev_data.get("date") != date_str:
+        result["changes"] = compute_changes(prev_data, result)
+        result["changes"]["source"] = change_source
+    else:
+        result["changes"] = {
+            "available": False,
+            "reason": "尚未取得前一交易日持倉，後端會在下一次定時刷新或手動刷新時繼續補齊",
+            "new_positions": [],
+            "exited": [],
+            "increased": [],
+            "decreased": [],
+            "unchanged_count": 0,
+            "prev_date": prev_data.get("date", "") if isinstance(prev_data, dict) else "",
+            "curr_date": date_str,
+        }
+
+    _with_last_updated(result)
     _save_json(curr_p, result)
     return result
 
@@ -1662,6 +1767,9 @@ def fetch_all_etf_holdings(force_refresh: bool = False) -> dict[str, dict]:
             try:
                 with open(all_cache, encoding="utf-8") as f:
                     cached_all = json.load(f)
+                for code, item in list(cached_all.items()):
+                    if isinstance(item, dict):
+                        _with_last_updated(item, _curr_path(code))
                 logger.info("All ETF holdings cache hit (age=%.1fs, TTL=%d)", age, ALL_CACHE_TTL)
                 return cached_all
             except Exception:
@@ -1681,6 +1789,7 @@ def fetch_all_etf_holdings(force_refresh: bool = False) -> dict[str, dict]:
             results[code] = {
                 "code": code, "name": ACTIVE_ETFS[code],
                 "holdings": [], "total_holdings": 0,
+                "last_updated": _time_text(),
                 "error": str(e),
             }
         time.sleep(0.5)   # polite delay between MoneyDJ requests (reduced from 1.2s)

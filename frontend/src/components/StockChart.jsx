@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createChart, CrosshairMode, LineStyle } from 'lightweight-charts'
 import { api } from '../api/stocks.js'
+import { UpdateTime } from '../utils/time.jsx'
 
 const CHART_BG = '#0D0D0D'
 const GRID_COLOR = '#1A1A1A'
@@ -79,6 +80,7 @@ export default function StockChart({ symbol, stockName, interval }) {
   const [showBB, setShowBB] = useState(true)
   const [showOBV, setShowOBV] = useState(true)
   const [ohlcInfo, setOhlcInfo] = useState(null)
+  const [lastUpdated, setLastUpdated] = useState('')
 
   // ── Initialize charts (once) ──────────────────────────────────────────────
   useEffect(() => {
@@ -185,6 +187,7 @@ export default function StockChart({ symbol, stockName, interval }) {
     setError(null)
     try {
       const data = await api.getKline(symbol, interval)
+      setLastUpdated(data.last_updated || '')
       const { candle, maSeries, bbUpper, bbMiddle, bbLower, volume, obvLine, rsiLine, rsi70, rsi30, kLine, dLine, kd80, kd20 } = seriesRef.current
 
       candle.setData(data.data.map(d => ({
@@ -263,6 +266,7 @@ export default function StockChart({ symbol, stockName, interval }) {
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[#2A2A2A] bg-[#0A0A0A] flex-shrink-0 flex-wrap">
         <span className="text-white font-semibold text-sm">{symbol}</span>
         <span className="text-gray-500 text-xs">{stockName}</span>
+        <UpdateTime value={lastUpdated} />
 
         {/* OHLCV info on crosshair */}
         {ohlcInfo && (

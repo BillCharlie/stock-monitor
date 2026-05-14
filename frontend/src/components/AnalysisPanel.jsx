@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/stocks.js'
+import { UpdateTime, formatUpdateTime } from '../utils/time.jsx'
 
 function SignalRow({ s }) {
   const cls = s.type === 'bullish' ? 'signal-bullish' : s.type === 'bearish' ? 'signal-bearish' : 'signal-neutral'
@@ -138,6 +139,18 @@ const fmtK = v => {
   if (v >= 10000) return `${(v / 10000).toFixed(1)}萬`
   return v.toLocaleString()
 }
+const fmtEtfDelta = chg => {
+  if (!chg) return ''
+  if (chg.change_basis === 'weight' && chg.weight_delta != null) {
+    const delta = Number(chg.weight_delta)
+    return `${delta > 0 ? '+' : ''}${delta.toFixed(2)}pp`
+  }
+  if (chg.shares_delta != null) {
+    const delta = Number(chg.shares_delta)
+    return `${delta > 0 ? '+' : ''}${delta.toLocaleString()}`
+  }
+  return ''
+}
 
 // ── TW: 三大法人 ──────────────────────────────────────────────────────────────
 function ThreeForcesPanel({ data }) {
@@ -146,6 +159,9 @@ function ThreeForcesPanel({ data }) {
 
   return (
     <div className="space-y-3">
+      <div className="flex justify-end">
+        <UpdateTime value={data.last_updated || data.latest_date} />
+      </div>
       {/* 三大法人最新數字 */}
       <div className="grid grid-cols-3 gap-2">
         {[
@@ -249,6 +265,9 @@ function MarginPanel({ margin }) {
 
   return (
     <div className="space-y-3">
+      <div className="flex justify-end">
+        <UpdateTime value={margin.last_updated || margin.latest_date} />
+      </div>
       {/* 融資 / 融券 餘額卡片 */}
       <div className="grid grid-cols-2 gap-2">
         <div className="bg-[#111] rounded p-2 border border-[#1E1E1E]">
@@ -360,7 +379,7 @@ function MajorForcePanel({ data }) {
       <div className="bg-[#0D1020] border border-[#1E2A3A] rounded p-3">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs text-gray-400 font-semibold">主力動向判讀</span>
-          <span className="text-[9px] text-gray-600">{data.latest_date}</span>
+          <UpdateTime value={data.last_updated || data.latest_date} />
         </div>
         <div className={`text-sm font-bold ${sentColor} mb-2`}>{sentiment}</div>
         <div className="grid grid-cols-2 gap-2 text-[10px]">
@@ -417,17 +436,22 @@ function InvestorsTW({ data }) {
   return (
     <div className="space-y-2 pt-1">
       {/* Tab bar */}
-      <div className="flex gap-1 border-b border-[#1E1E1E] pb-1">
-        {tabs.map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)}
-            className={`px-3 py-1 text-xs rounded-t transition-colors ${
-              tab === t.key
-                ? 'bg-[#1A1A2E] text-white border border-[#2A2A4A] border-b-transparent'
-                : 'text-gray-500 hover:text-gray-300'
-            }`}>
-            {t.label}
-          </button>
-        ))}
+      <div className="flex items-center gap-2 border-b border-[#1E1E1E] pb-1">
+        <div className="flex gap-1">
+          {tabs.map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              className={`px-3 py-1 text-xs rounded-t transition-colors ${
+                tab === t.key
+                  ? 'bg-[#1A1A2E] text-white border border-[#2A2A4A] border-b-transparent'
+                  : 'text-gray-500 hover:text-gray-300'
+              }`}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto">
+          <UpdateTime value={tab === 'margin' ? (data.margin?.last_updated || data.margin_last_updated) : data.last_updated} />
+        </div>
       </div>
 
       {tab === 'major'  && <MajorForcePanel  data={data} />}
@@ -629,6 +653,11 @@ function EtfSectorOverview() {
 
   const totalW = Object.values(sectorAgg).reduce((s, v) => s + v, 0)
   if (!totalW) return null
+  const allUpdatedAt = Object.values(allData || {})
+    .map(item => item?.last_updated || item?.fetched_at || '')
+    .filter(Boolean)
+    .sort()
+    .pop()
 
   const sectors = Object.entries(sectorAgg)
     .sort(([, a], [, b]) => b - a)
@@ -653,6 +682,9 @@ function EtfSectorOverview() {
         📊 主動式ETF 產業配置分析（股票型彙整）
       </div>
       <div className="bg-[#101214] border border-[#1E2833] rounded p-3 space-y-3">
+        <div className="flex justify-end">
+          <UpdateTime value={allUpdatedAt} />
+        </div>
 
         {/* Pie + legend row */}
         <div className="flex gap-4 items-start">
@@ -762,38 +794,45 @@ function EtfHoldingsPanel({ symbol }) {
               {data.top10_weight && (
                 <span>前10大占比 <strong className="text-[#FFA726]">{data.top10_weight}%</strong></span>
               )}
-              <span className="ml-auto text-gray-700">更新: {data.date}</span>
+              <span className="text-gray-700">持股日: {data.date}</span>
+              <span className="ml-auto"><UpdateTime value={data.last_updated || data.fetched_at || data.date} /></span>
             </div>
 
             {/* Change summary (vs previous trading day) */}
             {data.changes && (
               <div className="bg-[#0A0A14] border border-[#1E1E3A] rounded px-2 py-1.5 flex flex-wrap gap-2 text-[10px]">
                 <span className="text-gray-600 mr-1">較前日:</span>
-                {data.changes.new_positions?.length > 0 && (
-                  <span className="text-[#26A69A] font-semibold">
-                    ＋{data.changes.new_positions.length} 新建倉
-                    {' '}({data.changes.new_positions.slice(0,3).map(h => h.stock_code || h.stock_name).join('/')})
-                  </span>
-                )}
-                {data.changes.exited?.length > 0 && (
-                  <span className="text-[#EF5350] font-semibold">
-                    −{data.changes.exited.length} 出清
-                    {' '}({data.changes.exited.slice(0,3).map(h => h.stock_code || h.stock_name).join('/')})
-                  </span>
-                )}
-                {data.changes.increased?.length > 0 && (
-                  <span className="text-[#40C4FF]">
-                    ↑{data.changes.increased.length} 加碼
-                  </span>
-                )}
-                {data.changes.decreased?.length > 0 && (
-                  <span className="text-[#FFA726]">
-                    ↓{data.changes.decreased.length} 減碼
-                  </span>
-                )}
-                {!data.changes.new_positions?.length && !data.changes.exited?.length
-                  && !data.changes.increased?.length && !data.changes.decreased?.length && (
-                  <span className="text-gray-700">持股無變化</span>
+                {data.changes.available === false ? (
+                  <span className="text-yellow-500">{data.changes.reason || '尚未取得前一交易日持倉'}</span>
+                ) : (
+                  <>
+                    {data.changes.new_positions?.length > 0 && (
+                      <span className="text-[#26A69A] font-semibold">
+                        ＋{data.changes.new_positions.length} 新建倉
+                        {' '}({data.changes.new_positions.slice(0,3).map(h => h.stock_code || h.stock_name).join('/')})
+                      </span>
+                    )}
+                    {data.changes.exited?.length > 0 && (
+                      <span className="text-[#EF5350] font-semibold">
+                        −{data.changes.exited.length} 出清
+                        {' '}({data.changes.exited.slice(0,3).map(h => h.stock_code || h.stock_name).join('/')})
+                      </span>
+                    )}
+                    {data.changes.increased?.length > 0 && (
+                      <span className="text-[#40C4FF]">
+                        ↑{data.changes.increased.length} 加碼
+                      </span>
+                    )}
+                    {data.changes.decreased?.length > 0 && (
+                      <span className="text-[#FFA726]">
+                        ↓{data.changes.decreased.length} 減碼
+                      </span>
+                    )}
+                    {!data.changes.new_positions?.length && !data.changes.exited?.length
+                      && !data.changes.increased?.length && !data.changes.decreased?.length && (
+                      <span className="text-gray-700">持股無變化</span>
+                    )}
+                  </>
                 )}
                 {data.changes.prev_date && (
                   <span className="ml-auto text-gray-700">前次: {data.changes.prev_date}</span>
@@ -809,9 +848,9 @@ function EtfHoldingsPanel({ symbol }) {
                 for (const h of (data.changes.new_positions || []))
                   changeMap[h.stock_code] = { type: 'new' }
                 for (const h of (data.changes.increased || []))
-                  changeMap[h.stock_code] = { type: 'up', delta: h.shares_delta }
+                  changeMap[h.stock_code] = { type: 'up', row: h }
                 for (const h of (data.changes.decreased || []))
-                  changeMap[h.stock_code] = { type: 'down', delta: h.shares_delta }
+                  changeMap[h.stock_code] = { type: 'down', row: h }
               }
               return (
                 <div className="overflow-x-auto max-h-80 overflow-y-auto">
@@ -833,8 +872,8 @@ function EtfHoldingsPanel({ symbol }) {
                           ? chg.type === 'new'
                             ? <span className="text-[#26A69A] font-bold">NEW</span>
                             : chg.type === 'up'
-                              ? <span className="text-[#40C4FF]">↑{chg.delta?.toLocaleString()}</span>
-                              : <span className="text-[#FFA726]">↓{Math.abs(chg.delta)?.toLocaleString()}</span>
+                              ? <span className="text-[#40C4FF]">↑{fmtEtfDelta(chg.row)}</span>
+                              : <span className="text-[#FFA726]">↓{fmtEtfDelta(chg.row).replace('-', '')}</span>
                           : <span className="text-gray-800">─</span>
                         return (
                           <tr key={i} className={`border-b border-[#111] hover:bg-[#111] ${chg ? 'bg-[#0A0A12]' : ''}`}>
@@ -925,6 +964,9 @@ function InvestorsSection({ symbol }) {
         <span className="font-semibold text-gray-300">
           {isTW ? '主力動向 / 三大法人 / 融資融券' : '法人 / 散戶持股分析'}
         </span>
+        <span className="ml-auto mr-2">
+          <UpdateTime value={data?.last_updated} />
+        </span>
         <span className="text-[10px] text-gray-600">{open ? '▼' : '▶'}</span>
       </button>
       {open && (
@@ -968,6 +1010,7 @@ function SingleAnalysis({ symbol, stockName }) {
         <div>
           <span className="text-xl font-bold text-white">{data.name}</span>
           <span className="text-gray-500 ml-2 text-sm">{data.symbol}</span>
+          <div className="mt-1"><UpdateTime value={data.last_updated || data.generated_at} /></div>
         </div>
         <div className="flex items-baseline gap-3">
           <span className="text-2xl font-mono text-white">{data.price?.toLocaleString()}</span>
@@ -1022,7 +1065,7 @@ function SingleAnalysis({ symbol, stockName }) {
 
       <div className="text-[10px] text-gray-700 pt-2">
         ⚠ 以上分析基於技術指標數學模型，不構成投資建議。投資有風險，請自行判斷。
-        最後更新: {data.generated_at}
+        最後更新: {formatUpdateTime(data.last_updated || data.generated_at)}
       </div>
     </div>
   )
@@ -1060,6 +1103,7 @@ function DailyReport({ refreshToken = 0 }) {
         <div>
           <div className="text-lg font-bold text-white">每日投資分析報告</div>
           <div className="text-xs text-gray-500">{report.date} | 生成: {report.generated_at}</div>
+          <UpdateTime value={report.last_updated || report.generated_at} />
         </div>
         <div className={`px-3 py-1 rounded text-sm font-semibold ${
           report.market_sentiment === '多頭' ? 'bg-[#2A0A0A] text-[#EF5350]' :

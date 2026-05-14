@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api/stocks.js'
+import { UpdateTime } from '../utils/time.jsx'
 
 function IndexCard({ item }) {
   const isUp = item.change_pct >= 0
@@ -30,7 +31,7 @@ export default function MarketOverview() {
     try {
       const data = await api.getMarketOverview()
       setIndices(data.indices || [])
-      setLastUpdate(new Date().toLocaleTimeString('zh-TW', { hour12: false }))
+      setLastUpdate(data.last_updated || '')
     } catch {
       // silently ignore
     }
@@ -52,8 +53,8 @@ export default function MarketOverview() {
         {indices.map(idx => <IndexCard key={idx.symbol} item={idx} />)}
       </div>
       {lastUpdate && (
-        <div className="px-3 flex-shrink-0 text-[10px] text-gray-600">
-          更新 {lastUpdate}
+        <div className="px-3 flex-shrink-0">
+          <UpdateTime value={lastUpdate} label="後端更新" />
         </div>
       )}
     </div>

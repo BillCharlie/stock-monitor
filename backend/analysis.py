@@ -17,7 +17,7 @@ from indicators import (
     calculate_obv,
     calculate_rsi,
 )
-from stock_data import get_ohlcv, get_investors_data
+from stock_data import get_ohlcv, get_investors_data, get_ohlcv_last_updated
 from chip_analysis import identify_major_institutions
 
 logger = logging.getLogger(__name__)
@@ -178,6 +178,8 @@ def _analyze_institutional_investors(symbol: str) -> dict:
                 "type": "tw",
                 "symbol": symbol,
                 "latest_date": latest_date,
+                "last_updated": investors_data.get("last_updated"),
+                "margin_last_updated": investors_data.get("margin_last_updated"),
                 "components": {
                     "foreign_net": foreign_net,
                     "trust_net": trust_net,
@@ -238,6 +240,7 @@ def _analyze_institutional_investors(symbol: str) -> dict:
             return {
                 "type": "us",
                 "symbol": symbol,
+                "last_updated": investors_data.get("last_updated"),
                 "held_pct_insiders": held_pct_insiders,
                 "held_pct_institutions": held_pct_institutions,
                 "top_institutions": top_institutions[:5] if top_institutions else [],
@@ -515,6 +518,7 @@ def analyze_stock(symbol: str, name: str = "", interval: str = "1d") -> dict:
         "investors": investors_data,
         "institutional_analysis": institutional_analysis,
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "last_updated": get_ohlcv_last_updated(symbol, interval) or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
