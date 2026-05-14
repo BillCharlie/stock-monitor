@@ -18,7 +18,7 @@ export default function App() {
   const [hasPdf, setHasPdf] = useState(false)
   const [reportVersion, setReportVersion] = useState(0)
   const [showKeys, setShowKeys] = useState(false)
-  const [sidebarW, setSidebarW] = useState(224)
+  const [sidebarW, setSidebarW] = useState(280)
   const resizingRef = useRef(false)
   const resizeStartXRef = useRef(0)
   const resizeStartWRef = useRef(0)
@@ -27,7 +27,7 @@ export default function App() {
     const onMove = (e) => {
       if (!resizingRef.current) return
       const delta = e.clientX - resizeStartXRef.current
-      setSidebarW(Math.max(160, Math.min(480, resizeStartWRef.current + delta)))
+      setSidebarW(Math.max(220, Math.min(560, resizeStartWRef.current + delta)))
     }
     const onUp = () => {
       if (resizingRef.current) {
