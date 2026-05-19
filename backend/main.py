@@ -815,16 +815,33 @@ def get_stock_institutions(symbol: str):
 
 # ─── Analysis ─────────────────────────────────────────────────────────────────
 
+def _sanitize_floats(obj):
+    """Recursively replace NaN/Inf floats with None so FastAPI JSON won't crash."""
+    import math
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
+
+
 @app.get("/api/stocks/{symbol}/analysis")
 def get_stock_analysis(symbol: str, name: Optional[str] = ""):
     if symbol in _stock_analyses:
         cached = _stock_analyses[symbol]
         cached["last_updated"] = cached.get("last_updated") or cached.get("generated_at") or _server_time_text()
         return cached
-    result = analyze_stock(symbol, name or "")
-    result["last_updated"] = result.get("last_updated") or result.get("generated_at") or _server_time_text()
-    _stock_analyses[symbol] = result
-    return result
+    try:
+        result = analyze_stock(symbol, name or "")
+        result = _sanitize_floats(result)
+        result["last_updated"] = result.get("last_updated") or result.get("generated_at") or _server_time_text()
+        _stock_analyses[symbol] = result
+        return result
+    except Exception as exc:
+        logger.exception("analyze_stock failed for %s: %s", symbol, exc)
+        raise HTTPException(status_code=500, detail=f"分析失敗：{exc}")
 
 
 # ─── Market overview ──────────────────────────────────────────────────────────

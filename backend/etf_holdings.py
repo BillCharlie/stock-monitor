@@ -1408,11 +1408,88 @@ def _moneydj_url(code: str) -> str:
     )
 
 
+def _find_moneydj_holdings_table(tables: list[pd.DataFrame]) -> pd.DataFrame | None:
+    """
+    Content-based detection for MoneyDJ holdings table.
+
+    MoneyDJ's new page layout has garbled/mojibake column headers but the DATA
+    columns are always: [name+code_combined, weight_float, shares_int].
+    We detect by checking that column-1 is numeric 0-100 and column-2 is a
+    positive integer, which uniquely identifies the holdings table.
+    """
+    for df in tables:
+        if df.shape[1] < 3 or len(df) < 5:
+            continue
+        try:
+            weights = pd.to_numeric(df.iloc[:, 1], errors="coerce")
+            shares  = pd.to_numeric(df.iloc[:, 2], errors="coerce")
+            valid_w = weights.dropna()
+            valid_s = shares.dropna()
+            if (
+                len(valid_w) >= 5
+                and float(valid_w.between(0, 100).mean()) > 0.8
+                and len(valid_s) >= 5
+                and float(valid_s.gt(0).mean()) > 0.8
+            ):
+                return df
+        except Exception:
+            continue
+    return None
+
+
+def _parse_moneydj_holdings(df: pd.DataFrame) -> list[dict]:
+    """
+    Parse MoneyDJ's 3-column holdings table:
+      col[0]: 'Lam Research(LRCX.US)' or '4063.JP' style combined name+code
+      col[1]: weight percentage (float)
+      col[2]: shares held (integer)
+    """
+    holdings = []
+    for _, row in df.iterrows():
+        name_code = str(row.iloc[0]).strip()
+        weight    = pd.to_numeric(row.iloc[1], errors="coerce")
+        shares_v  = pd.to_numeric(row.iloc[2], errors="coerce")
+
+        if pd.isna(weight) or name_code in ("nan", ""):
+            continue
+
+        # Extract code from parentheses: "Name(CODE.US)" or "(4063.JP)"
+        m_code = re.search(r"\(([A-Z0-9]{1,8})\.[A-Z]{2}\)", name_code)
+        stock_code = m_code.group(1) if m_code else ""
+
+        # Clean name: strip trailing (CODE.XX) if present
+        stock_name = re.sub(r"\s*\([^)]+\)\s*$", "", name_code).strip()
+        if not stock_name:
+            stock_name = name_code
+
+        shares = int(shares_v) if not pd.isna(shares_v) else None
+
+        if not stock_name and not stock_code:
+            continue
+
+        holdings.append({
+            "stock_code": stock_code,
+            "stock_name": stock_name,
+            "weight_pct": round(float(weight), 4),
+            "shares":     shares,
+        })
+
+    holdings.sort(
+        key=lambda h: h["weight_pct"] if h["weight_pct"] is not None else -1,
+        reverse=True,
+    )
+    return holdings
+
+
 def _scrape_moneydj(code: str) -> tuple[str, list[dict]]:
     """
     Scrape MoneyDJ ETF holdings page.
     Returns (date_str "YYYY-MM-DD", holdings_list).
     Returns ("", []) on failure.
+
+    Detection strategy: MoneyDJ now renders column headers in mojibake
+    (garbled encoding), so we use content-based table detection instead of
+    header-keyword matching.
     """
     url = _moneydj_url(code)
     try:
@@ -1428,14 +1505,17 @@ def _scrape_moneydj(code: str) -> tuple[str, list[dict]]:
     # ── Extract date ──────────────────────────────────────────────────────────
     date_str = ""
     m = re.search(r"資料日期[：:]\s*(\d{4})[/\-](\d{1,2})[/\-](\d{1,2})", html)
+    if not m:
+        # Also try encoded date pattern
+        m = re.search(r"(\d{4})/(\d{2})/(\d{2})", html)
     if m:
         y, mo, d = m.group(1), m.group(2).zfill(2), m.group(3).zfill(2)
         date_str = f"{y}-{mo}-{d}"
     else:
-        # Fallback: today
         date_str = datetime.now().strftime("%Y-%m-%d")
 
     # ── Parse tables ──────────────────────────────────────────────────────────
+    tables: list[pd.DataFrame] = []
     try:
         tables = pd.read_html(io.StringIO(html), flavor="lxml")
     except Exception:
@@ -1443,16 +1523,89 @@ def _scrape_moneydj(code: str) -> tuple[str, list[dict]]:
             tables = pd.read_html(io.StringIO(html))
         except Exception as e2:
             logger.warning("pd.read_html failed for %s: %s", code, e2)
-            return date_str, []
 
+    # Try content-based detection first (handles garbled column headers)
+    df = _find_moneydj_holdings_table(tables)
+    if df is not None:
+        holdings = _parse_moneydj_holdings(df)
+        logger.info("MoneyDJ %s: %d holdings (content-detect), date=%s", code, len(holdings), date_str)
+        return date_str, holdings
+
+    # Fallback: legacy keyword-based detection
     df = _find_holdings_table(tables)
     if df is None:
         logger.info("No holdings table found on MoneyDJ for %s", code)
         return date_str, []
 
     holdings = _parse_holdings_df(df)
-    logger.info("MoneyDJ %s: %d holdings, date=%s", code, len(holdings), date_str)
+    logger.info("MoneyDJ %s: %d holdings (keyword-detect), date=%s", code, len(holdings), date_str)
     return date_str, holdings
+
+
+def _parse_etfinfo_code(raw: str) -> tuple[str, str]:
+    """
+    Extract (stock_code, stock_name) from etfinfo.tw combined cell.
+
+    etfinfo.tw renders code+name without separator, e.g.:
+      'LRCX科林研發股份有限公司'  → ('LRCX', '科林研發股份有限公司')
+      '4063信越化學工業'          → ('4063', '信越化學工業')
+      'LINLinde PLC'             → ('LIN', 'Linde PLC')
+
+    Rules:
+      1. Leading 4+ digits = TW/JP numeric ticker
+      2. Leading uppercase ASCII before first CJK character = ticker
+      3. Leading uppercase ASCII before first lowercase letter = ticker
+      4. Fallback: up to 5 leading uppercase/digits
+    """
+    if not raw or raw in ("nan", "NaN", "—", "-"):
+        return "", raw
+
+    # Rule 1: 4–6 leading digits (TW/JP codes)
+    m = re.match(r"^(\d{4,6})(.*)", raw)
+    if m:
+        return m.group(1), m.group(2).strip()
+
+    # Rule 2: uppercase/digits before first CJK char
+    m = re.match(r"^([A-Z][A-Z0-9]*)(?=[一-鿿぀-ゟ゠-ヿ])", raw)
+    if m:
+        return m.group(1), raw[len(m.group(1)):].strip()
+
+    # Rule 3: uppercase/digits before first lowercase letter (e.g. 'LINLinde PLC')
+    m = re.match(r"^([A-Z][A-Z0-9]*)(?=[a-z])", raw)
+    if m:
+        return m.group(1), raw[len(m.group(1)):].strip()
+
+    # Rule 4: fallback – take up to 5 leading uppercase chars/digits
+    m = re.match(r"^([A-Z0-9]{1,5})", raw)
+    if m:
+        code = m.group(1)
+        return code, raw[len(code):].strip()
+
+    return "", raw.strip()
+
+
+def _parse_etfinfo_weight_shares(raw: str) -> tuple[float | None, int | None]:
+    """
+    Parse etfinfo.tw combined weight+shares cell, e.g. '7.14%90,500'.
+    Returns (weight_pct, shares).
+    """
+    raw = raw.strip()
+    m = re.match(r"([\d.]+)%\s*([\d,]+)", raw)
+    if m:
+        try:
+            weight = float(m.group(1))
+            shares = int(m.group(2).replace(",", ""))
+            return weight, shares
+        except ValueError:
+            pass
+    # Fallback: try to extract just a weight percentage
+    m2 = re.match(r"([\d.]+)%", raw)
+    if m2:
+        try:
+            return float(m2.group(1)), None
+        except ValueError:
+            pass
+    return None, None
 
 
 # ── etfinfo.tw scraper (fallback) ─────────────────────────────────────────────
@@ -1461,6 +1614,9 @@ def _scrape_etfinfo(code: str) -> tuple[str, list[dict]]:
     """
     Scrape etfinfo.tw holdings page as fallback.
     Returns (date_str, holdings_list).
+
+    etfinfo.tw combines (code+name) in col[0] and (weight%+shares) in col[2],
+    requiring specialised parsing beyond the generic _parse_holdings_df().
     """
     url = f"https://www.etfinfo.tw/etf/{code}/holdings"
     try:
@@ -1481,18 +1637,63 @@ def _scrape_etfinfo(code: str) -> tuple[str, list[dict]]:
     else:
         date_str = datetime.now().strftime("%Y-%m-%d")
 
+    # etfinfo.tw sometimes has encoding issues with later tables; use lxml
+    # which reliably parses at least the first (holdings) table
+    tables: list[pd.DataFrame] = []
     try:
-        tables = pd.read_html(io.StringIO(html))
+        tables = pd.read_html(io.StringIO(html), flavor="lxml")
     except Exception as e:
         logger.warning("etfinfo pd.read_html failed %s: %s", code, e)
+
+    if not tables:
         return date_str, []
 
-    df = _find_holdings_table(tables)
-    if df is None:
-        return date_str, []
+    # etfinfo format: 4-col table [code+name | price | weight%+shares | contribution]
+    # Identify the right table: >=3 rows, col[2] matches 'N.NN%M,MMM' pattern
+    target_df: pd.DataFrame | None = None
+    for df in tables:
+        if df.shape[1] < 3 or len(df) < 3:
+            continue
+        # Check if col[2] values look like combined weight%shares
+        sample = df.iloc[:, 2].astype(str).head(3)
+        if sample.str.contains(r"\d+\.\d+%\d", regex=True).any():
+            target_df = df
+            break
 
-    holdings = _parse_holdings_df(df)
-    logger.info("etfinfo.tw %s: %d holdings, date=%s", code, len(holdings), date_str)
+    if target_df is None:
+        # Fallback: use generic parsing on first available table
+        df = _find_holdings_table(tables)
+        if df is None:
+            return date_str, []
+        holdings = _parse_holdings_df(df)
+        logger.info("etfinfo.tw %s: %d holdings (generic), date=%s", code, len(holdings), date_str)
+        return date_str, holdings
+
+    holdings = []
+    for _, row in target_df.iterrows():
+        raw_name_code = str(row.iloc[0]).strip()
+        raw_ws        = str(row.iloc[2]).strip()
+
+        stock_code, stock_name = _parse_etfinfo_code(raw_name_code)
+        weight, shares = _parse_etfinfo_weight_shares(raw_ws)
+
+        if not stock_name and not stock_code:
+            continue
+        if raw_name_code in ("nan", "NaN", "—", "-", ""):
+            continue
+
+        holdings.append({
+            "stock_code": stock_code,
+            "stock_name": stock_name,
+            "weight_pct": round(weight, 4) if weight is not None else None,
+            "shares":     shares,
+        })
+
+    holdings.sort(
+        key=lambda h: h["weight_pct"] if h["weight_pct"] is not None else -1,
+        reverse=True,
+    )
+    logger.info("etfinfo.tw %s: %d holdings (structured), date=%s", code, len(holdings), date_str)
     return date_str, holdings
 
 
