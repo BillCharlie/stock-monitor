@@ -428,7 +428,12 @@ def _get_tw_quote_from_twse(symbol: str) -> dict | None:
 
 
 def _fetch_yfinance(symbol: str, period: str, interval: str) -> pd.DataFrame:
-    """Shared yfinance fetch helper — returns cleaned DataFrame or empty."""
+    """Shared yfinance fetch helper — returns cleaned DataFrame or empty.
+
+    yfinance 0.2.55+ may return:
+    - Timezone-aware index (Asia/Taipei for TW stocks) — strip with tz_convert(None)
+    - NaN rows for today's incomplete intraday data — drop to prevent JSON serialization errors
+    """
     try:
         ticker = yf.Ticker(symbol)
         df = ticker.history(period=period, interval=interval,
@@ -437,7 +442,13 @@ def _fetch_yfinance(symbol: str, period: str, interval: str) -> pd.DataFrame:
             logger.warning("yfinance returned empty data for %s", symbol)
             return pd.DataFrame()
         df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-        df.index = df.index.tz_localize(None)
+        # Strip timezone: tz_convert(None) works for both tz-aware and tz-naive index
+        if df.index.tz is not None:
+            df.index = df.index.tz_convert(None)
+        else:
+            df.index = df.index.tz_localize(None)
+        # Drop rows with NaN Close (today's incomplete data from yfinance 0.2.55+)
+        df = df.dropna(subset=["Close"])
         df = df[~df.index.duplicated(keep="last")]
         df = df.sort_index()
         logger.info("yfinance: %d records for %s (period=%s)", len(df), symbol, period)
@@ -513,6 +524,8 @@ def get_quote(symbol: str) -> dict:
     try:
         t  = yf.Ticker(symbol)
         df = t.history(period="5d", interval="1d", auto_adjust=True, actions=False)
+        # yfinance 0.2.55+ may add today's row with NaN prices before market closes
+        df = df.dropna(subset=["Close"])
         if not df.empty:
             close      = float(df["Close"].iloc[-1])
             prev_close = float(df["Close"].iloc[-2]) if len(df) > 1 else close
@@ -558,13 +571,16 @@ def get_quote(symbol: str) -> dict:
 def df_to_ohlcv_list(df: pd.DataFrame) -> list:
     records = []
     for idx, row in df.iterrows():
+        # Skip rows with NaN prices — yfinance 0.2.55+ may include incomplete today's row
+        if pd.isna(row.get("Close")):
+            continue
         records.append({
             "time": idx.strftime("%Y-%m-%d"),
             "open": round(float(row["Open"]), 4),
             "high": round(float(row["High"]), 4),
             "low": round(float(row["Low"]), 4),
             "close": round(float(row["Close"]), 4),
-            "volume": int(row["Volume"]),
+            "volume": int(row["Volume"]) if not pd.isna(row.get("Volume")) else 0,
         })
     return records
 
