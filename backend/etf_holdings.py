@@ -430,7 +430,11 @@ def _parse_holdings_df(df: pd.DataFrame) -> list[dict]:
         shares = None
         if shares_col:
             sv = _clean_number(row[shares_col])
-            shares = int(sv) if sv is not None else None
+            if sv is not None:
+                try:
+                    shares = int(sv)
+                except (ValueError, OverflowError):
+                    shares = None
 
         # Skip rows without meaningful data
         if not stock_name and not stock_code:
@@ -1413,28 +1417,36 @@ def _find_moneydj_holdings_table(tables: list[pd.DataFrame]) -> pd.DataFrame | N
     Content-based detection for MoneyDJ holdings table.
 
     MoneyDJ's new page layout has garbled/mojibake column headers but the DATA
-    columns are always: [name+code_combined, weight_float, shares_int].
-    We detect by checking that column-1 is numeric 0-100 and column-2 is a
-    positive integer, which uniquely identifies the holdings table.
+    columns are always: [name+code_combined, weight_float, shares_int_or_nan].
+
+    Stock ETFs: col[1]=weight, col[2]=shares (integer)
+    Bond ETFs:  col[1]=weight, col[2]=NaN (no share counts for bonds)
+
+    We detect by: col[1] is numeric with values 0-100, table has >= 5 rows.
     """
+    best: pd.DataFrame | None = None
+    best_score = 0
     for df in tables:
-        if df.shape[1] < 3 or len(df) < 5:
+        if df.shape[1] < 2 or len(df) < 5:
             continue
         try:
             weights = pd.to_numeric(df.iloc[:, 1], errors="coerce")
-            shares  = pd.to_numeric(df.iloc[:, 2], errors="coerce")
             valid_w = weights.dropna()
-            valid_s = shares.dropna()
-            if (
-                len(valid_w) >= 5
-                and float(valid_w.between(0, 100).mean()) > 0.8
-                and len(valid_s) >= 5
-                and float(valid_s.gt(0).mean()) > 0.8
-            ):
-                return df
+            if len(valid_w) < 5 or float(valid_w.between(0, 100).mean()) <= 0.8:
+                continue
+            # Score: prefer tables with share counts in col[2]
+            score = len(valid_w)
+            if df.shape[1] >= 3:
+                shares = pd.to_numeric(df.iloc[:, 2], errors="coerce")
+                valid_s = shares.dropna()
+                if len(valid_s) >= 5 and float(valid_s.gt(0).mean()) > 0.8:
+                    score += 1000   # strongly prefer tables with shares
+            if score > best_score:
+                best_score = score
+                best = df
         except Exception:
             continue
-    return None
+    return best
 
 
 def _parse_moneydj_holdings(df: pd.DataFrame) -> list[dict]:
