@@ -1,6 +1,6 @@
 # Stock Monitor — 台灣 / 美股即時監控與主動式 ETF 分析系統
 # Stock Monitor — Taiwan / US Stock Real-Time Monitor & Active ETF Analysis
-
+# https://billcharlie.github.io/stock-monitor/
 > **作者 / Author:** Ping yu-Chen, Taiwan
 > **版本 / Version:** v2.0
 > **授權 / License:** 請詳閱 `LICENSE` / See `LICENSE` — 商業使用須授權 / Commercial use requires written permission
