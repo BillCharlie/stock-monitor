@@ -89,13 +89,97 @@ The following elements of the Software are explicitly protected and may NOT
 be reproduced, adapted, or used as the basis for any other work without
 written permission, even for non-commercial purposes:
 
-  • Overall system architecture and multi-module design pattern;
-  • The stock data aggregation, scheduling, and alert pipeline design;
-  • The Taiwan/US market dual-source monitoring and unified notification logic;
-  • Any prompt engineering strategies, LLM integration patterns, or AI-assisted
-    analysis workflows implemented in this Software;
-  • The automated report generation and notification delivery mechanisms;
-  • Core algorithmic logic for stock screening, filtering, and alert thresholds.
+  4.1 SYSTEM ARCHITECTURE & SCHEDULING DESIGN
+      • FastAPI multi-module backend architecture integrating APScheduler with
+        six independent time-zoned jobs (Taiwan close 13:40, US close 05:10,
+        morning email 07:00, ETF refresh 18:00, evening data refresh 18:30,
+        data health report 19:00), all keyed to Asia/Taipei timezone;
+      • Dual-environment override system via REPORT_HOUR/MINUTE,
+        ETF_HOLDINGS_HOUR/MINUTE, DATA_REFRESH_HOUR/MINUTE environment
+        variables allowing runtime rescheduling without code changes;
+      • In-memory cache architecture (_daily_report, _stock_analyses,
+        _etf_holdings dicts) with SHA256 header token authentication
+        separating read-only public endpoints from write endpoints
+        (API_SECRET_REPORT / API_SECRET_STOCK dual-secret model);
+      • Multi-tier data persistence design: in-memory cache → per-symbol
+        JSON snapshots → prev/curr ETF snapshot pairs for change detection.
+
+  4.2 ACTIVE ETF (主動式ETF) DATA PIPELINE
+      • The curated ACTIVE_ETFS registry mapping 34 Taiwan active ETFs
+        to their fund names, using "A" suffix (stock-type, codes 00980A–
+        00999A, 00400A–00403A) and "D" suffix (bond-type, 00980D–00986D)
+        classification conventions as implemented in etf_holdings.py;
+      • The fetch_etf_holdings() scraping engine targeting MoneyDJ
+        (https://www.moneydj.com/KMDJ/Wiki/...) with pd.read_html() table
+        detection, 4-hour TTL cache, and automatic fallback to etfinfo.tw;
+      • The _repair_mojibake() character encoding recovery algorithm that
+        corrects Latin-1/UTF-8 conversion errors in MoneyDJ responses
+        (e.g., "å°ç©é»" → "台積電");
+      • The compute_holdings_changes() snapshot comparison algorithm that
+        identifies new_positions, exited_positions, increased_weight, and
+        decreased_weight between prev and current ETF holdings snapshots;
+      • The fetch_etf_sector_summary() aggregation pipeline mapping Taiwan
+        industry codes (01–38) to named sectors ("半導體", "金融",
+        "AI與雲端", etc.), with multi-horizon baseline tracking against
+        historical snapshots at 1d/7d/30d/91d/182d/273d/365d intervals;
+      • The build_etf_email_section() HTML renderer generating per-ETF
+        top-5 holdings tables with share-change badges.
+
+  4.3 INDIVIDUAL STOCK ANALYSIS MATHEMATICAL MODELS
+      • The analyze_stock() weighted composite scoring engine in
+        analysis.py computing 60+ technical signals mapped to a continuous
+        score in [-2.0, +2.0] with five rating tiers:
+        strong_buy (≥2.5) / buy (≥1.0) / hold (≥-1.0) /
+        sell (≥-2.5) / strong_sell (<-2.5);
+      • Moving average signal weights: MA Golden Cross (MA5>MA20) ±2.0,
+        short-term trend (MA5 vs MA10) ±1.0, mid-term trend
+        (MA20 vs MA60) ±1.0, quarterly line (price vs MA60) ±0.5,
+        annual line (price vs MA240) ±0.5;
+      • The Taiwan-specific Slow Stochastic KD formula:
+        K = (2/3)×prev_K + (1/3)×RSV;  D = (2/3)×prev_D + (1/3)×K,
+        with KD Golden/Dead Cross signals ±2.0, overbought/oversold
+        thresholds at 80/20, as implemented in indicators.py;
+      • RSI divergence detection over a 5-bar sliding window:
+        price-up/RSI-down scores -1.5 (bearish divergence),
+        price-down/RSI-up scores +1.5 (bullish divergence);
+      • OBV (On-Balance Volume) divergence detection over a 10-bar window:
+        price-up/OBV-down = -1.5 (volume weakness),
+        price-down/OBV-up = +1.5 (volume accumulation);
+      • Volume ratio analysis: current volume vs 20-day MA volume;
+        ratio >2.0 on up-day = +1.5 (explosive bullish),
+        ratio >2.0 on down-day = -1.5 (capitulation sell signal);
+      • The _linear_regression_forecast() function fitting
+        Price = slope×day + intercept over last 20/60 bars,
+        returning predicted price, pred_change_pct, 95% confidence
+        interval [lower, upper], R² goodness-of-fit, and slope_per_day;
+      • The _analyze_institutional_investors() dual-market scoring model:
+        Taiwan 三大法人 (Foreign ±0.5, Trust ±0.3, Dealer ±0.2,
+        Total ±1.0) plus 3-day sustained trend bonus ±1.0;
+        US insider ownership >20% = +0.5, institutional >70% = +1.0;
+      • Herfindahl-Hirschman Index (HHI = Σ percentage²) concentration
+        classification: >2500 "高度集中", 1500–2500 "中度集中",
+        <1500 "分散", as implemented in chip_analysis.py.
+
+  4.4 DATA ACQUISITION & MULTI-SOURCE ARBITRAGE
+      • Priority-ordered multi-source fallback chain for Taiwan quotes:
+        bulk TWSE/TPEX cache (5-min TTL) → TWSE MIS API
+        (mis.twse.com.tw) → Sina Finance → Tencent Finance → yfinance;
+      • The get_investors_data() dual-path logic: FinMind API for Taiwan
+        三大法人 + 融資融券 data; SEC filing parsing for US institutional
+        holdings — unified into a single normalized response schema;
+      • Multi-interval OHLCV caching: 24h TTL for daily, 7d for weekly
+        data, with df_to_ohlcv_list() standardizing output to
+        [{time, open, high, low, close, volume}] JSON format.
+
+  4.5 WATCHLIST DATA STRUCTURE & TAXONOMY
+      • The nested watchlist hierarchy (地區 > 產業 > 細分類 > 四級分類)
+        with 70+ Taiwan subcategories spanning 半導體, 電子, 金融,
+        鋼鐵, 航運, 生技醫療, etc., as defined in watchlist.py;
+      • The leaf node schema {symbol, name, name_en, tags[]} enabling
+        multilingual display and multi-tag sector filtering;
+      • The generate_daily_report() aggregation logic that de-duplicates
+        symbols across nested watchlist categories, computes per-sector
+        average scores, and ranks top_opportunities and top_risks.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   SECTION 5 — PROHIBITED ACTIONS
