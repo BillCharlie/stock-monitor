@@ -1,21 +1,43 @@
 import { obfuscate, deobfuscate, hashKey } from './crypto.js'
 
-// BASE is initialized at runtime from api-config.json (GitHub Pages) or falls back to /api (local).
-// This avoids baking a dynamic tunnel URL into the JS bundle at build time.
+// BASE is initialized at runtime from api-config.json.
+// If the configured public backend is gone, requests fall back to same-origin
+// /api and then a local backend so the app still works during deployment issues.
 let BASE = '/api'
+let BASES = ['/api']
+
+function apiBaseFromOrigin(origin) {
+  if (!origin) return ''
+  return origin.replace(/\/$/, '') + '/api'
+}
+
+function uniqueBases(values) {
+  return [...new Set(values.filter(Boolean))]
+}
+
+function localBackendBase() {
+  if (typeof window === 'undefined') return ''
+  const protocol = window.location.protocol === 'https:' ? 'http:' : window.location.protocol
+  return `${protocol}//127.0.0.1:8765/api`
+}
 
 const _configReady = (async () => {
+  const bases = []
   try {
     const res = await fetch(`${import.meta.env.BASE_URL}api-config.json`)
     if (res.ok) {
       const cfg = await res.json()
       if (cfg.apiBaseUrl) {
-        BASE = cfg.apiBaseUrl.replace(/\/$/, '') + '/api'
+        bases.push(apiBaseFromOrigin(cfg.apiBaseUrl))
       }
     }
   } catch {
-    // local mode: no config file, BASE stays '/api'
+    // local mode: no config file
   }
+  bases.push('/api')
+  bases.push(localBackendBase())
+  BASES = uniqueBases(bases)
+  BASE = BASES[0] || '/api'
 })()
 
 // Keys stored obfuscated in localStorage; only SHA-256 hash is ever sent over the wire.
@@ -40,12 +62,37 @@ async function stockHeaders() {
 
 async function request(path, options) {
   await _configReady
-  const res = await fetch(BASE + path, options)
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail || `HTTP ${res.status}`)
+  let lastError = null
+
+  for (const base of BASES) {
+    try {
+      const res = await fetch(base + path, options)
+      if (res.ok) {
+        BASE = base
+        return res.json()
+      }
+
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      const message = err.detail || err.message || `HTTP ${res.status}`
+      const canFallback =
+        res.status >= 500 ||
+        message === 'Application not found' ||
+        (res.status === 404 && base === '/api')
+
+      lastError = new Error(message)
+      if (!canFallback) {
+        lastError.noFallback = true
+        throw lastError
+      }
+    } catch (err) {
+      if (err?.noFallback) {
+        throw err
+      }
+      lastError = err
+    }
   }
-  return res.json()
+
+  throw lastError || new Error('Unable to connect to API')
 }
 
 export const api = {
