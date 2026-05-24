@@ -36,7 +36,15 @@ from indicators import (
     calculate_rsi,
     series_to_list,
 )
-from stock_data import df_to_ohlcv_list, get_investors_data, get_ohlcv, get_ohlcv_last_updated, get_quote, get_tw_margin_data
+from stock_data import (
+    df_to_ohlcv_list,
+    get_investors_data,
+    get_ohlcv,
+    get_ohlcv_last_updated,
+    get_quote,
+    get_tw_margin_data,
+    is_tw_market_closed_today,
+)
 from watchlist import MARKET_INDICES, WATCHLIST
 from etf_holdings import (
     fetch_etf_holdings,
@@ -198,6 +206,15 @@ def _refresh_news():
 def _run_etf_holdings_refresh():
     """18:00 scheduler: fetch all active ETF portfolio disclosures from TWSE."""
     global _etf_holdings
+    if is_tw_market_closed_today():
+        logger.info("TW market is closed today; skipping ETF holdings refresh.")
+        _write_refresh_status("etf_holdings", {
+            "skipped": True,
+            "reason": "tw_market_closed",
+            "schedule": "18:00 Asia/Taipei",
+        })
+        return {"skipped": True, "reason": "tw_market_closed"}
+
     logger.info("Running 18:00 active ETF holdings refresh (%d ETFs)...", len(ACTIVE_ETFS))
     try:
         _etf_holdings = fetch_all_etf_holdings(force_refresh=True)
@@ -257,10 +274,13 @@ def _run_evening_data_refresh():
         symbol for symbol in symbols
         if symbol.upper().endswith((".TW", ".TWO"))
     ]
+    tw_market_closed = is_tw_market_closed_today()
     delay = max(0.0, float(os.getenv("MARKET_DATA_REFRESH_SLEEP_SECONDS", "0.2")))
 
     summary = {
         "tw_symbols": len(tw_symbols),
+        "tw_market_closed": tw_market_closed,
+        "market_data_skipped": False,
         "major_force_ok": 0,
         "three_forces_ok": 0,
         "margin_ok": 0,
@@ -273,36 +293,40 @@ def _run_evening_data_refresh():
 
     logger.info("Running 18:30 data refresh (%d TW/TPEX symbols)...", len(tw_symbols))
 
-    for symbol in tw_symbols:
-        try:
-            investors = get_investors_data(symbol, force_refresh=True)
-            if investors.get("error"):
+    if tw_market_closed:
+        summary["market_data_skipped"] = True
+        logger.info("TW market is closed today; skipping TW/TPEX and ETF force refresh.")
+    else:
+        for symbol in tw_symbols:
+            try:
+                investors = get_investors_data(symbol, force_refresh=True)
+                if investors.get("error"):
+                    summary["symbol_errors"] += 1
+                else:
+                    summary["three_forces_ok"] += 1
+                    summary["major_force_ok"] += 1
+
+                margin = investors.get("margin") if isinstance(investors, dict) else None
+                if isinstance(margin, dict) and not margin.get("error"):
+                    summary["margin_ok"] += 1
+            except Exception as e:
                 summary["symbol_errors"] += 1
-            else:
-                summary["three_forces_ok"] += 1
-                summary["major_force_ok"] += 1
+                logger.warning("Evening refresh failed for %s: %s", symbol, e)
 
-            margin = investors.get("margin") if isinstance(investors, dict) else None
-            if isinstance(margin, dict) and not margin.get("error"):
-                summary["margin_ok"] += 1
+            if delay:
+                time.sleep(delay)
+
+        try:
+            _etf_holdings = fetch_all_etf_holdings(force_refresh=True)
+            summary["etf_ok"] = sum(
+                1 for data in _etf_holdings.values()
+                if data.get("total_holdings", 0) > 0
+            )
+            summary["etf_errors"] = sum(1 for data in _etf_holdings.values() if data.get("error"))
+            fetch_etf_sector_summary(force_refresh=True, holdings_refresh=False)
         except Exception as e:
-            summary["symbol_errors"] += 1
-            logger.warning("Evening refresh failed for %s: %s", symbol, e)
-
-        if delay:
-            time.sleep(delay)
-
-    try:
-        _etf_holdings = fetch_all_etf_holdings(force_refresh=True)
-        summary["etf_ok"] = sum(
-            1 for data in _etf_holdings.values()
-            if data.get("total_holdings", 0) > 0
-        )
-        summary["etf_errors"] = sum(1 for data in _etf_holdings.values() if data.get("error"))
-        fetch_etf_sector_summary(force_refresh=True, holdings_refresh=False)
-    except Exception as e:
-        summary["etf_errors"] += len(ACTIVE_ETFS)
-        logger.error("Evening ETF refresh failed: %s", e)
+            summary["etf_errors"] += len(ACTIVE_ETFS)
+            logger.error("Evening ETF refresh failed: %s", e)
 
     try:
         news = fetch_all_news(force=True)

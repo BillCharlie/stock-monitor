@@ -45,6 +45,82 @@ def _latest_mtime_text(paths: list[str]) -> str:
     return _time_text(datetime.fromtimestamp(max(mtimes)))
 
 
+def is_tw_symbol(symbol: str) -> bool:
+    upper = symbol.upper()
+    return upper.endswith(".TW") or upper.endswith(".TWO")
+
+
+def _parse_twse_roc_date(value: str) -> str:
+    parts = str(value).split("/")
+    if len(parts) != 3:
+        return ""
+    try:
+        return f"{int(parts[0]) + 1911:04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+    except Exception:
+        return ""
+
+
+def _market_day_cache_path() -> str:
+    return os.path.join(CACHE_DIR, "tw_market_days.json")
+
+
+def _load_market_day_cache() -> dict:
+    path = _market_day_cache_path()
+    try:
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def _save_market_day_cache(cache: dict) -> None:
+    try:
+        with open(_market_day_cache_path(), "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.debug("Market-day cache save failed: %s", e)
+
+
+def is_tw_market_closed_today(now: datetime | None = None) -> bool:
+    """Return True on Taiwan weekends/known no-trade weekdays."""
+    now = now or datetime.now()
+    if now.weekday() >= 5:
+        return True
+    if now.hour < 14:
+        return False
+
+    key = now.strftime("%Y-%m-%d")
+    cache = _load_market_day_cache()
+    cached = cache.get(key)
+    if isinstance(cached, dict) and "closed" in cached:
+        return bool(cached["closed"])
+
+    try:
+        resp = requests.get(
+            "https://www.twse.com.tw/exchangeReport/STOCK_DAY",
+            params={"response": "json", "date": now.strftime("%Y%m%d"), "stockNo": "2330"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=8,
+            verify=False,
+        )
+        data = resp.json()
+        rows = data.get("data") or []
+        has_today = any(_parse_twse_roc_date(row[0]) == key for row in rows if row)
+        closed = not has_today
+        cache[key] = {
+            "closed": closed,
+            "checked_at": _time_text(now),
+            "reason": "official trading row found" if has_today else "no official trading row for today",
+        }
+        _save_market_day_cache(cache)
+        return closed
+    except Exception as e:
+        logger.debug("TW market-day probe failed: %s", e)
+        return False
+
+
 # ─── Bulk quote cache (TWSE + TPEX) ──────────────────────────────────────────
 # One API call fetches ALL stocks; we cache for 5 min and serve individual lookups
 _bulk_cache: dict = {"twse": {}, "tpex": {}, "twse_ts": 0.0, "tpex_ts": 0.0}
@@ -184,10 +260,10 @@ def get_ohlcv_last_updated(symbol: str, interval: str = "1d") -> str:
     return _mtime_text(_cache_path(symbol, interval, period))
 
 
-def _load_cache(path: str, ttl: int) -> pd.DataFrame | None:
+def _load_cache(path: str, ttl: int | None) -> pd.DataFrame | None:
     if not os.path.exists(path):
         return None
-    if time.time() - os.path.getmtime(path) > ttl:
+    if ttl is not None and time.time() - os.path.getmtime(path) > ttl:
         return None
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -208,6 +284,35 @@ def _save_cache(path: str, df: pd.DataFrame) -> None:
             json.dump(out.to_dict(orient="records"), f)
     except Exception as e:
         logger.warning(f"Cache save failed: {e}")
+
+
+def _quote_from_cached_ohlcv(symbol: str) -> dict | None:
+    period = INTERVAL_PERIOD.get("1d", "5y")
+    cache_path = _cache_path(symbol, "1d", period)
+    df = _load_cache(cache_path, None)
+    if df is None or df.empty:
+        return None
+    try:
+        df = df.dropna(subset=["Close"]).sort_index()
+        if df.empty:
+            return None
+        close = float(df["Close"].iloc[-1])
+        prev_close = float(df["Close"].iloc[-2]) if len(df) > 1 else close
+        change = close - prev_close
+        change_pct = (change / prev_close * 100) if prev_close else 0
+        volume = int(df["Volume"].iloc[-1]) if "Volume" in df.columns and not pd.isna(df["Volume"].iloc[-1]) else 0
+        return {
+            "price": round(close, 4),
+            "change": round(change, 4),
+            "change_pct": round(change_pct, 2),
+            "volume": volume,
+            "date": df.index[-1].strftime("%Y-%m-%d"),
+            "source": "cached_last_close",
+            "last_updated": _mtime_text(cache_path) or _time_text(),
+        }
+    except Exception as e:
+        logger.debug("Cached OHLCV quote failed for %s: %s", symbol, e)
+        return None
 
 
 
@@ -442,9 +547,9 @@ def _fetch_yfinance(symbol: str, period: str, interval: str) -> pd.DataFrame:
             logger.warning("yfinance returned empty data for %s", symbol)
             return pd.DataFrame()
         df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
-        # Strip timezone: tz_convert(None) works for both tz-aware and tz-naive index
+        # Strip timezone while preserving the exchange-local calendar date.
         if df.index.tz is not None:
-            df.index = df.index.tz_convert(None)
+            df.index = df.index.tz_localize(None)
         else:
             df.index = df.index.tz_localize(None)
         # Drop rows with NaN Close (today's incomplete data from yfinance 0.2.55+)
@@ -470,12 +575,20 @@ def get_ohlcv(symbol: str, interval: str = "1d", force_refresh: bool = False) ->
     period     = INTERVAL_PERIOD.get(interval, "5y")
     ttl        = CACHE_TTL.get(interval, 300)
     cache_path = _cache_path(symbol, interval, period)
+    tw_closed  = is_tw_symbol(symbol) and is_tw_market_closed_today()
 
     if not force_refresh:
-        cached = _load_cache(cache_path, ttl)
+        cached = _load_cache(cache_path, None if tw_closed else ttl)
         if cached is not None and not cached.empty:
             logger.debug("Cache hit for %s", symbol)
             return cached
+
+    if tw_closed:
+        cached = _load_cache(cache_path, None)
+        if cached is not None and not cached.empty:
+            logger.info("TW market closed; serving cached OHLCV for %s", symbol)
+            return cached
+        logger.info("TW market closed but no OHLCV cache exists for %s; trying fallback fetch", symbol)
 
     # ── Step 1: yfinance (primary for everything) ─────────────────────────────
     df = _fetch_yfinance(symbol, period, interval)
@@ -484,8 +597,7 @@ def get_ohlcv(symbol: str, interval: str = "1d", force_refresh: bool = False) ->
         return df
 
     # ── Step 2: TWSE / TPEX fallback (Taiwan stocks only) ────────────────────
-    upper = symbol.upper()
-    if upper.endswith(".TW") or upper.endswith(".TWO"):
+    if is_tw_symbol(symbol):
         logger.warning("yfinance empty for %s — trying TWSE/TPEX fallback...", symbol)
         # 60 months = 5 years; for weekly/monthly use full history
         months = 60 if interval == "1d" else 120
@@ -510,17 +622,23 @@ def get_quote(symbol: str) -> dict:
       US / other stocks:
         1. yfinance history(5d)
     """
-    upper = symbol.upper()
-    is_tw = upper.endswith(".TW") or upper.endswith(".TWO")
+    is_tw = is_tw_symbol(symbol)
+    tw_closed = is_tw and is_tw_market_closed_today()
 
     def with_update(data: dict) -> dict:
         if not data:
             return data
         out = dict(data)
-        out["last_updated"] = _time_text()
+        out["last_updated"] = out.get("last_updated") or _time_text()
         return out
 
     # ── Step 1: yfinance (primary for ALL symbols) ────────────────────────────
+    if tw_closed:
+        q = _quote_from_cached_ohlcv(symbol)
+        if q:
+            logger.info("TW market closed; serving cached last close quote for %s", symbol)
+            return with_update(q)
+
     try:
         t  = yf.Ticker(symbol)
         df = t.history(period="5d", interval="1d", auto_adjust=True, actions=False)
@@ -634,9 +752,10 @@ def _fm_three_forces(code: str, days: int = 5, force_refresh: bool = False) -> l
         {date, foreign_net, trust_net, dealer_net, total_net}
     """
     cache_path = os.path.join(CACHE_DIR, f"fm_3f_{code}.json")
-    if not force_refresh and os.path.exists(cache_path):
+    market_closed = is_tw_market_closed_today()
+    if (not force_refresh or market_closed) and os.path.exists(cache_path):
         age = time.time() - os.path.getmtime(cache_path)
-        if age < INVESTORS_CACHE_TTL:
+        if age < INVESTORS_CACHE_TTL or market_closed:
             try:
                 with open(cache_path, encoding="utf-8") as f:
                     cached = json.load(f)
@@ -706,9 +825,10 @@ def _fm_margin(code: str, days: int = 5, force_refresh: bool = False) -> list:
          short_sell, short_buy, short_bal, margin_short_ratio}
     """
     cache_path = os.path.join(CACHE_DIR, f"fm_margin_{code}.json")
-    if not force_refresh and os.path.exists(cache_path):
+    market_closed = is_tw_market_closed_today()
+    if (not force_refresh or market_closed) and os.path.exists(cache_path):
         age = time.time() - os.path.getmtime(cache_path)
-        if age < INVESTORS_CACHE_TTL:
+        if age < INVESTORS_CACHE_TTL or market_closed:
             try:
                 with open(cache_path, encoding="utf-8") as f:
                     cached = json.load(f)
