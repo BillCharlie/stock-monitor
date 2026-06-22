@@ -1092,6 +1092,52 @@ function SingleAnalysis({ symbol, stockName }) {
   )
 }
 
+function ChinaMarketReportSection({ section }) {
+  const results = Object.values(section?.results || {}).sort((a, b) => b.score - a.score)
+
+  return (
+    <div className="rounded border border-red-950 bg-[#160B0B] p-3">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="text-sm font-semibold text-red-300">🇨🇳 中國股市</div>
+        <div className={`text-[10px] font-semibold ${
+          section?.sentiment === '多頭' ? 'text-[#EF5350]' :
+          section?.sentiment === '空頭' ? 'text-[#26A69A]' : 'text-[#FFA726]'
+        }`}>
+          {section?.sentiment || '暫無資料'}
+          {section?.avg_score != null && ` (${section.avg_score > 0 ? '+' : ''}${section.avg_score})`}
+        </div>
+      </div>
+      {results.length > 0 ? (
+        <div className="space-y-2">
+          {results.map(r => (
+            <div key={r.symbol} className="rounded bg-[#211010] px-3 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <span className="text-xs font-semibold text-white">{r.name}</span>
+                  <span className="ml-2 text-[10px] text-gray-500">{r.symbol}</span>
+                </div>
+                <span className={`text-[10px] font-semibold rating-${r.rating_key}`}>{r.rating}</span>
+              </div>
+              <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-gray-400 sm:grid-cols-4">
+                <span>現價 <b className="font-mono text-gray-200">{r.price?.toLocaleString()}</b></span>
+                <span>RSI <b className="font-mono text-gray-200">{r.indicators?.RSI ?? '—'}</b></span>
+                <span>K / D <b className="font-mono text-gray-200">{r.indicators?.K ?? '—'} / {r.indicators?.D ?? '—'}</b></span>
+                <span>MA20 <b className="font-mono text-gray-200">{r.indicators?.MA20 ?? '—'}</b></span>
+                <span>支撐 <b className="font-mono text-[#EF5350]">{r.support ?? '—'}</b></span>
+                <span>壓力 <b className="font-mono text-[#26A69A]">{r.resistance ?? '—'}</b></span>
+                <span>5日預測 <b className="font-mono text-gray-200">{r.prediction_5d?.pred_change_pct != null ? `${r.prediction_5d.pred_change_pct > 0 ? '+' : ''}${r.prediction_5d.pred_change_pct}%` : '—'}</b></span>
+                <span>評分 <b className="font-mono text-gray-200">{r.score > 0 ? '+' : ''}{r.score}</b></span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-[10px] text-gray-600">本次沒有可用的中國股市技術分析資料。</div>
+      )}
+    </div>
+  )
+}
+
 function DailyReport({ refreshToken = 0 }) {
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -1190,6 +1236,9 @@ function DailyReport({ refreshToken = 0 }) {
           ))}
         </div>
       </div>
+
+      {/* Dedicated China market block */}
+      <ChinaMarketReportSection section={report.market_sections?.['中國股市']} />
 
       <TrumpNewsReportSummary data={report.trump_news} />
 

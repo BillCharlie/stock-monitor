@@ -35,6 +35,7 @@ NEWS_QUERIES = [
     ("rare earth gold copper mining", "en-US", "US"),
     ("台股 大盤 半導體類股", "zh-TW", "TW"),
     ("US stock market tech sector", "en-US", "US"),
+    ("比亞迪 A股 新能源汽車 中國股市", "zh-CN", "CN"),
 ]
 
 def _fetch_google_news_rss(query: str, hl: str = "zh-TW", gl: str = "TW", max_items: int = 5) -> list[dict]:
@@ -91,11 +92,19 @@ def _build_analysis_section(all_results: dict) -> str:
     if not all_results:
         return "（尚無技術分析資料）"
     lines = []
-    # Sort by score descending
-    sorted_items = sorted(all_results.values(), key=lambda x: x.get("score", 0), reverse=True)
+    # Keep each market distinct so the report can render a dedicated China block.
+    sorted_items = sorted(
+        all_results.values(),
+        key=lambda x: (x.get("market", "其他"), -x.get("score", 0)),
+    )
+    current_market = None
     for r in sorted_items:
         if r.get("error"):
             continue
+        market = r.get("market", "其他")
+        if market != current_market:
+            lines.append(f"\n【{market}】")
+            current_market = market
         pred5 = r.get("prediction_5d", {})
         pred_str = ""
         if pred5:
@@ -239,7 +248,7 @@ def _build_prompt(
     news_text = _build_news_section(all_news)
     trump_text = format_trump_news_for_prompt(trump_news)
 
-    return f"""你是一位專業的台灣/美國股市投資分析師，擅長技術分析、產業趨勢判斷、機構投資者行為分析與風險管理。
+    return f"""你是一位專業的台灣、美國與中國股市投資分析師，擅長技術分析、產業趨勢判斷、機構投資者行為分析與風險管理。
 今天是 {date_str}，請根據以下數據產生一份完整的每日投資分析報告。
 
 ═══════════════════════════════════
@@ -262,11 +271,11 @@ def _build_prompt(
 
 ═══════════════════════════════════
 【報告要求】
-請產生一份完整的 HTML 格式投資分析報告，包含以下八個章節：
+請產生一份完整的 HTML 格式投資分析報告，包含以下九個章節：
 
 1. 📊 大盤與市場總覽
    - 今日市場情緒研判（多頭/空頭/中性）
-   - 台股與美股盤面特徵分析
+   - 台股、美股與中國股市盤面特徵分析
    - 主要風險因子
 
 2. 🏢 機構投資者與主力分析
@@ -298,7 +307,12 @@ def _build_prompt(
    - 明確分析可能影響的股市領域，例如半導體/AI、能源、金融利率、國防、醫療、加密資產、台灣供應鏈
    - 區分「直接政策訊號」與「媒體解讀/市場反應」
 
-8. 🔮 明日展望與操作建議
+8. 🇨🇳 中國股市
+   - 本章必須獨立呈現，不可併入台股或美股
+   - 逐一整理中國股市標的的技術評級、MA、RSI、KD、布林通道、量價/OBV、支撐壓力與短期量化預測
+   - 目前至少需涵蓋比亞迪（002594.SZ），並說明新能源汽車板塊的主要機會與風險
+
+9. 🔮 明日展望與操作建議
    - 基於數學模型的短期預測摘要
    - 明日盤前建議關注的關鍵點位與事件
    - 機構投資者可能的後續動作預測
@@ -347,7 +361,7 @@ def generate_gpt_report(
                 {
                     "role": "system",
                     "content": (
-                        "你是頂尖的台美股市投資分析師，熟悉技術分析、半導體產業鏈、礦產資源市場。"
+                        "你是頂尖的台灣、美國與中國股市投資分析師，熟悉技術分析、半導體產業鏈、汽車產業與礦產資源市場。"
                         "你的報告準確、專業、有洞察力，同時提醒投資風險。"
                     ),
                 },

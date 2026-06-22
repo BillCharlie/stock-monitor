@@ -1,5 +1,5 @@
-# Stock Monitor — 台灣 / 美股即時監控與主動式 ETF 分析系統
-# Stock Monitor — Taiwan / US Stock Real-Time Monitor & Active ETF Analysis
+# Stock Monitor — 台灣 / 中國 / 美股即時監控與主動式 ETF 分析系統
+# Stock Monitor — Taiwan / China / US Stock Real-Time Monitor & Active ETF Analysis
 # https://billcharlie.github.io/stock-monitor/
 > **作者 / Author:** Ping yu-Chen, Taiwan
 > **版本 / Version:** v2.0
@@ -30,10 +30,10 @@
 ## 系統簡介 / Overview
 
 **中文：**
-Stock Monitor 是針對台灣 / 美股市場設計的全自動股市監控與分析系統。系統每日在台股收盤（13:40）與美股收盤（隔日 05:10）後自動執行技術分析，整合 60+ 技術指標訊號、三大法人籌碼、融資融券，並追蹤 34 支台灣主動式 ETF 的持股異動，每日早晨透過 GPT-4o 生成 HTML 報告並以 Email 夾帶 PDF 寄送。前端為 React SPA，部署於 GitHub Pages；後端 FastAPI 部署於 Railway。
+Stock Monitor 是針對台灣 / 中國 / 美股市場設計的全自動股市監控與分析系統。系統每日在台股收盤（13:40）、中國 A 股收盤（15:10）與美股收盤（隔日 05:10）後自動執行技術分析，整合 60+ 技術指標訊號、三大法人籌碼、融資融券，並追蹤 34 支台灣主動式 ETF 的持股異動，每日早晨透過 GPT-4o 生成 HTML 報告並以 Email 夾帶 PDF 寄送。前端為 React SPA，部署於 GitHub Pages；後端 FastAPI 部署於 Railway。
 
 **English:**
-Stock Monitor is a fully automated stock monitoring and analysis system for Taiwan and US markets. The system runs technical analysis after the Taiwan market close (13:40) and US market close (05:10 next day), integrating 60+ technical indicator signals, Taiwan institutional investor data (三大法人), margin trading data, and tracking of 34 Taiwan active ETFs for holdings changes. Each morning, GPT-4o generates an HTML report delivered by email with a PDF attachment. The React SPA frontend is deployed on GitHub Pages; the FastAPI backend runs on Railway.
+Stock Monitor is a fully automated stock monitoring and analysis system for Taiwan, China, and US markets. The system runs technical analysis after the Taiwan market close (13:40), China A-share close (15:10), and US market close (05:10 next day), integrating 60+ technical indicator signals, Taiwan institutional investor data (三大法人), margin trading data, and tracking of 34 Taiwan active ETFs for holdings changes. Each morning, GPT-4o generates an HTML report delivered by email with a PDF attachment. The React SPA frontend is deployed on GitHub Pages; the FastAPI backend runs on Railway.
 
 ---
 
@@ -48,7 +48,7 @@ Stock Monitor is a fully automated stock monitoring and analysis system for Taiw
 - **RSI / OBV 背離偵測** — RSI 5 日窗口背離 ±1.5 分；OBV 10 日窗口背離 ±1.5 分
 - **每日 GPT-4o 報告** — 自動合成技術分析 + 新聞 + 籌碼，生成 HTML 報告，Email 夾帶 PDF
 - **Trump 新聞監控** — 追蹤 X、Truth Social、白宮 RSS，納入早報政策面評估
-- **產業分類觀察清單** — 70+ 台灣細分類（半導體、AI 雲端、金融、生技等）及美股
+- **產業分類觀察清單** — 70+ 台灣細分類（半導體、AI 雲端、金融、生技等）、中國 A 股及美股
 - **主動式 ETF 產業分佈** — 各 ETF 持股跨產業匯總，含多時間段 baseline 追蹤（1d / 7d / 30d / 1y）
 
 **English:**
@@ -60,7 +60,7 @@ Stock Monitor is a fully automated stock monitoring and analysis system for Taiw
 - **RSI / OBV divergence detection** — RSI 5-bar window divergence ±1.5; OBV 10-bar window divergence ±1.5
 - **Daily GPT-4o report** — Synthesizes technical analysis + news + institutional data; delivers HTML report + PDF via email
 - **Trump news monitoring** — Tracks X (Twitter), Truth Social, and White House RSS for policy-impact assessment
-- **Industry watchlist** — 70+ Taiwan subcategories (semiconductors, AI/cloud, financials, biotech, etc.) and US stocks
+- **Industry watchlist** — 70+ Taiwan subcategories (semiconductors, AI/cloud, financials, biotech, etc.), China A-shares, and US stocks
 - **Active ETF sector distribution** — Cross-ETF holdings aggregation with multi-horizon baseline tracking (1d / 7d / 30d / 1y)
 
 ---
@@ -198,6 +198,7 @@ Build output goes to `frontend/dist/`, auto-deployed to GitHub Pages via GitHub 
 | 時間 / Time | 說明 / Description | 觸發條件 / Trigger |
 |-------------|--------------------|--------------------|
 | 每日 13:40（週一–五）| 台股收盤分析 / Taiwan market close analysis | 週一–五 / Mon–Fri |
+| 每日 15:10（週一–五）| 中國 A 股收盤分析 / China A-share close analysis | 週一–五 / Mon–Fri |
 | 每日 05:10（週二–六）| 美股收盤分析 / US market close analysis | 週二–六 / Tue–Sat |
 | 每日 07:00（可設定）| 早報 Email — 技術分析 + GPT 報告 + PDF | 週一–五 / Mon–Fri |
 | 每日 18:00（可設定）| ETF 持股更新 / Active ETF holdings refresh | 週一–五 / Mon–Fri |
