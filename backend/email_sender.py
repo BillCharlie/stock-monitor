@@ -134,6 +134,27 @@ def _build_fallback_html(daily_report: dict) -> str:
         f"{v['sentiment']}</td><td style='padding:4px 8px;font-family:monospace'>{v['avg_score']:+.2f}</td></tr>"
         for sec, v in sector.items()
     )
+    china_market = daily_report.get("market_sections", {}).get("中國股市", {})
+    china_rows = "".join(
+        f"<tr><td style='padding:4px 8px'>{escape(r.get('name', ''))}</td>"
+        f"<td style='padding:4px 8px;color:#888'>{escape(r.get('symbol', ''))}</td>"
+        f"<td style='padding:4px 8px'>{r.get('price', '—')}</td>"
+        f"<td style='padding:4px 8px;color:{'#26A69A' if r.get('score', 0) > 0 else '#EF5350' if r.get('score', 0) < 0 else '#FFA726'}'>"
+        f"{escape(r.get('rating', '—'))} ({r.get('score', 0):+.1f})</td>"
+        f"<td style='padding:4px 8px;font-family:monospace'>{r.get('indicators', {}).get('RSI') or '—'}</td>"
+        f"<td style='padding:4px 8px;font-family:monospace'>{r.get('support') or '—'} / {r.get('resistance') or '—'}</td></tr>"
+        for r in china_market.get("results", {}).values()
+    )
+    china_section = f"""
+<h2 style="color:#DE2910;margin-top:24px">🇨🇳 中國股市</h2>
+<p>板塊情緒：<strong style="color:#FFA726">{escape(china_market.get('sentiment', '暫無資料'))}</strong></p>
+<table style="border-collapse:collapse;width:100%">
+<tr style="background:#2A1010;color:#AAA;font-size:12px">
+  <th style="padding:4px 8px;text-align:left">名稱</th><th style="padding:4px 8px;text-align:left">代號</th>
+  <th style="padding:4px 8px;text-align:left">現價</th><th style="padding:4px 8px;text-align:left">技術評級</th>
+  <th style="padding:4px 8px;text-align:left">RSI</th><th style="padding:4px 8px;text-align:left">支撐 / 壓力</th>
+</tr>{china_rows or '<tr><td colspan="6" style="padding:8px;color:#888">本次沒有可用的中國股市技術分析資料</td></tr>'}</table>
+"""
     trump_theme_rows = "".join(
         f"<tr><td style='padding:4px 8px'>{escape(t.get('label',''))}</td>"
         f"<td style='padding:4px 8px;color:#FFA726'>{escape(t.get('bias',''))}</td>"
@@ -193,6 +214,8 @@ def _build_fallback_html(daily_report: dict) -> str:
 </tr>{sector_rows}</table>
 
 {chip_section}
+
+{china_section}
 
 {trump_block}
 """

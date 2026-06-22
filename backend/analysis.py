@@ -543,6 +543,7 @@ def generate_daily_report(watchlist: dict) -> dict:
     top_buy: list[dict] = []
     top_sell: list[dict] = []
     sector_scores: dict[str, list[float]] = {}
+    market_results: dict[str, dict[str, dict]] = {}
 
     for path, s in all_items:
         symbol = s["symbol"]
@@ -551,10 +552,12 @@ def generate_daily_report(watchlist: dict) -> dict:
         result = analyze_stock(symbol, s.get("name", ""))
         if "error" in result:
             continue
-        all_results[symbol] = result
         # accumulate per top-level sector (first component of path)
         top_sector = path.split(" > ")[0] if " > " in path else path
+        result["market"] = top_sector
+        all_results[symbol] = result
         sector_scores.setdefault(top_sector, []).append(result["score"])
+        market_results.setdefault(top_sector, {})[symbol] = result
         if result["rating_key"] in ("strong_buy", "buy"):
             top_buy.append({"symbol": symbol, "name": s.get("name", ""), "score": result["score"], "rating": result["rating"]})
         elif result["rating_key"] in ("strong_sell", "sell"):
@@ -567,6 +570,14 @@ def generate_daily_report(watchlist: dict) -> dict:
             "count": len(scores),
         }
         for sec, scores in sector_scores.items()
+    }
+
+    market_sections = {
+        market: {
+            **sector_summary[market],
+            "results": results,
+        }
+        for market, results in market_results.items()
     }
 
     top_buy.sort(key=lambda x: x["score"], reverse=True)
@@ -582,5 +593,6 @@ def generate_daily_report(watchlist: dict) -> dict:
         "top_opportunities": top_buy[:5],
         "top_risks": top_sell[:5],
         "sector_summary": sector_summary,
+        "market_sections": market_sections,
         "all_results": all_results,
     }

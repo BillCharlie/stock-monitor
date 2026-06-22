@@ -384,6 +384,9 @@ async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler(timezone="Asia/Taipei")
     # Taiwan close: Mon–Fri 13:40
     scheduler.add_job(_run_daily_analysis, "cron", day_of_week="mon-fri", hour=13, minute=40)
+    # China A-share close: Mon–Fri 15:10 (Asia/Taipei, 10 minutes after close)
+    scheduler.add_job(_run_daily_analysis, "cron", day_of_week="mon-fri", hour=15, minute=10,
+                      id="china_close_analysis")
     # US close: Tue–Sat 05:10 (Taiwan time)
     scheduler.add_job(_run_daily_analysis, "cron", day_of_week="tue-sat", hour=5, minute=10)
     # Morning email: every day at configured time (default 07:00 Taiwan)
