@@ -807,24 +807,24 @@ function EtfHoldingsPanel({ symbol }) {
                 ) : (
                   <>
                     {data.changes.new_positions?.length > 0 && (
-                      <span className="text-[#26A69A] font-semibold">
+                      <span className="text-[#EF5350] font-semibold">
                         ＋{data.changes.new_positions.length} 新建倉
                         {' '}({data.changes.new_positions.slice(0,3).map(h => h.stock_code || h.stock_name).join('/')})
                       </span>
                     )}
                     {data.changes.exited?.length > 0 && (
-                      <span className="text-[#EF5350] font-semibold">
+                      <span className="text-[#26A69A] font-semibold">
                         −{data.changes.exited.length} 出清
                         {' '}({data.changes.exited.slice(0,3).map(h => h.stock_code || h.stock_name).join('/')})
                       </span>
                     )}
                     {data.changes.increased?.length > 0 && (
-                      <span className="text-[#40C4FF]">
+                      <span className="text-[#EF5350]">
                         ↑{data.changes.increased.length} 加碼
                       </span>
                     )}
                     {data.changes.decreased?.length > 0 && (
-                      <span className="text-[#FFA726]">
+                      <span className="text-[#26A69A]">
                         ↓{data.changes.decreased.length} 減碼
                       </span>
                     )}

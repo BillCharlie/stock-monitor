@@ -56,7 +56,7 @@ def _build_chip_section_html(all_results: dict) -> str:
     top_sell = sorted(rows_buy, key=lambda x: x["total_net"])[:8]
 
     def fmt(n):
-        color = "#26A69A" if n > 0 else ("#EF5350" if n < 0 else "#888")
+        color = "#EF5350" if n > 0 else ("#26A69A" if n < 0 else "#888")
         sign  = "+" if n > 0 else ""
         return f"<span style='color:{color}'>{sign}{n:,}</span>"
 
@@ -87,12 +87,12 @@ def _build_chip_section_html(all_results: dict) -> str:
         return ""
 
     buy_table = (
-        "<h3 style='color:#26A69A;margin-top:16px'>▲ 三大法人買超 TOP 8（股數）</h3>"
+        "<h3 style='color:#EF5350;margin-top:16px'>▲ 三大法人買超 TOP 8（股數）</h3>"
         f"<table style='border-collapse:collapse;width:100%'>{header}{make_rows(top_buy)}</table>"
         if top_buy else ""
     )
     sell_table = (
-        "<h3 style='color:#EF5350;margin-top:16px'>▼ 三大法人賣超 TOP 8（股數）</h3>"
+        "<h3 style='color:#26A69A;margin-top:16px'>▼ 三大法人賣超 TOP 8（股數）</h3>"
         f"<table style='border-collapse:collapse;width:100%'>{header}{make_rows(top_sell)}</table>"
         if top_sell else ""
     )
@@ -114,23 +114,23 @@ def _build_fallback_html(daily_report: dict) -> str:
     trump_impact = trump_news.get("impact", {}) if isinstance(trump_news, dict) else {}
     all_results = daily_report.get("all_results", {})
 
-    sentiment_color = "#26A69A" if sentiment == "多頭" else ("#EF5350" if sentiment == "空頭" else "#FFA726")
+    sentiment_color = "#EF5350" if sentiment == "多頭" else ("#26A69A" if sentiment == "空頭" else "#FFA726")
 
     buy_rows = "".join(
         f"<tr><td style='padding:4px 8px'>{s['name']}</td><td style='padding:4px 8px;color:#888'>{s['symbol']}</td>"
-        f"<td style='padding:4px 8px;color:#26A69A;font-weight:bold'>{s['rating']}</td>"
+        f"<td style='padding:4px 8px;color:#EF5350;font-weight:bold'>{s['rating']}</td>"
         f"<td style='padding:4px 8px;font-family:monospace'>{s['score']:+.1f}</td></tr>"
         for s in top_buy
     )
     sell_rows = "".join(
         f"<tr><td style='padding:4px 8px'>{s['name']}</td><td style='padding:4px 8px;color:#888'>{s['symbol']}</td>"
-        f"<td style='padding:4px 8px;color:#EF5350;font-weight:bold'>{s['rating']}</td>"
+        f"<td style='padding:4px 8px;color:#26A69A;font-weight:bold'>{s['rating']}</td>"
         f"<td style='padding:4px 8px;font-family:monospace'>{s['score']:+.1f}</td></tr>"
         for s in top_sell
     )
     sector_rows = "".join(
         f"<tr><td style='padding:4px 8px'>{sec}</td>"
-        f"<td style='padding:4px 8px;color:{'#26A69A' if v['sentiment']=='多頭' else '#EF5350' if v['sentiment']=='空頭' else '#FFA726'}'>"
+        f"<td style='padding:4px 8px;color:{'#EF5350' if v['sentiment']=='多頭' else '#26A69A' if v['sentiment']=='空頭' else '#FFA726'}'>"
         f"{v['sentiment']}</td><td style='padding:4px 8px;font-family:monospace'>{v['avg_score']:+.2f}</td></tr>"
         for sec, v in sector.items()
     )
@@ -139,7 +139,7 @@ def _build_fallback_html(daily_report: dict) -> str:
         f"<tr><td style='padding:4px 8px'>{escape(r.get('name', ''))}</td>"
         f"<td style='padding:4px 8px;color:#888'>{escape(r.get('symbol', ''))}</td>"
         f"<td style='padding:4px 8px'>{r.get('price', '—')}</td>"
-        f"<td style='padding:4px 8px;color:{'#26A69A' if r.get('score', 0) > 0 else '#EF5350' if r.get('score', 0) < 0 else '#FFA726'}'>"
+        f"<td style='padding:4px 8px;color:{'#EF5350' if r.get('score', 0) > 0 else '#26A69A' if r.get('score', 0) < 0 else '#FFA726'}'>"
         f"{escape(r.get('rating', '—'))} ({r.get('score', 0):+.1f})</td>"
         f"<td style='padding:4px 8px;font-family:monospace'>{r.get('indicators', {}).get('RSI') or '—'}</td>"
         f"<td style='padding:4px 8px;font-family:monospace'>{r.get('support') or '—'} / {r.get('resistance') or '—'}</td></tr>"
@@ -192,14 +192,14 @@ def _build_fallback_html(daily_report: dict) -> str:
 <h2 style="color:#40C4FF">📊 量化技術分析報告（GPT分析未啟用）</h2>
 <p>市場情緒：<strong style="color:{sentiment_color};font-size:16px">{sentiment}</strong></p>
 
-<h3 style="color:#26A69A">🎯 買入候選 TOP 5</h3>
+<h3 style="color:#EF5350">🎯 買入候選 TOP 5</h3>
 <table style="border-collapse:collapse;width:100%">
 <tr style="background:#1A2A1A;color:#888;font-size:12px">
   <th style="padding:4px 8px;text-align:left">名稱</th><th style="padding:4px 8px;text-align:left">代號</th>
   <th style="padding:4px 8px;text-align:left">評級</th><th style="padding:4px 8px;text-align:left">評分</th>
 </tr>{buy_rows}</table>
 
-<h3 style="color:#EF5350;margin-top:16px">⚠️ 風險警示</h3>
+<h3 style="color:#26A69A;margin-top:16px">⚠️ 風險警示</h3>
 <table style="border-collapse:collapse;width:100%">
 <tr style="background:#2A1A1A;color:#888;font-size:12px">
   <th style="padding:4px 8px;text-align:left">名稱</th><th style="padding:4px 8px;text-align:left">代號</th>
