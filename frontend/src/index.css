@@ -43,16 +43,16 @@ html, body, #root {
 ::-webkit-scrollbar-thumb { background: #3A3A3A; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #555; }
 
-.up-color   { color: #26A69A; }
-.down-color { color: #EF5350; }
+.up-color   { color: #EF5350; }
+.down-color { color: #26A69A; }
 .neutral-color { color: #9B9B9B; }
 
-.signal-bullish { color: #26A69A; }
-.signal-bearish { color: #EF5350; }
+.signal-bullish { color: #EF5350; }
+.signal-bearish { color: #26A69A; }
 .signal-neutral { color: #9B9B9B; }
 
-.rating-strong_buy  { color: #26A69A; font-weight: 700; }
-.rating-buy         { color: #66BB6A; font-weight: 600; }
+.rating-strong_buy  { color: #EF5350; font-weight: 700; }
+.rating-buy         { color: #EF6C6C; font-weight: 600; }
 .rating-hold        { color: #FFA726; font-weight: 500; }
-.rating-sell        { color: #EF5350; font-weight: 600; }
-.rating-strong_sell { color: #B71C1C; font-weight: 700; }
+.rating-sell        { color: #26A69A; font-weight: 600; }
+.rating-strong_sell { color: #00897B; font-weight: 700; }
