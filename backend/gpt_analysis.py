@@ -36,6 +36,7 @@ NEWS_QUERIES = [
     ("台股 大盤 半導體類股", "zh-TW", "TW"),
     ("US stock market tech sector", "en-US", "US"),
     ("比亞迪 A股 新能源汽車 中國股市", "zh-CN", "CN"),
+    ("芯聯集成 688469 晶圓代工 功率半導體", "zh-CN", "CN"),
 ]
 
 def _fetch_google_news_rss(query: str, hl: str = "zh-TW", gl: str = "TW", max_items: int = 5) -> list[dict]:
@@ -310,7 +311,7 @@ def _build_prompt(
 8. 🇨🇳 中國股市
    - 本章必須獨立呈現，不可併入台股或美股
    - 逐一整理中國股市標的的技術評級、MA、RSI、KD、布林通道、量價/OBV、支撐壓力與短期量化預測
-   - 目前至少需涵蓋比亞迪（002594.SZ），並說明新能源汽車板塊的主要機會與風險
+   - 目前至少需涵蓋比亞迪（002594.SZ）與芯聯集成（688469.SS），並分別說明新能源汽車、晶圓代工與功率半導體板塊的主要機會與風險
 
 9. 🔮 明日展望與操作建議
    - 基於數學模型的短期預測摘要
