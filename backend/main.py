@@ -68,6 +68,7 @@ os.makedirs(_DATA_DIR, exist_ok=True)
 
 CUSTOM_STOCKS_FILE    = os.path.join(_DATA_DIR, "custom_stocks.json")
 USER_WATCHLIST_FILE   = os.path.join(_DATA_DIR, "user_watchlist.json")
+PORTFOLIOS_FILE       = os.path.join(_DATA_DIR, "portfolios.json")
 STATIC_DIR            = os.path.join(_BASE_DIR, "static")
 REFRESH_STATUS_FILE   = os.path.join(_DATA_DIR, "refresh_status.json")
 
@@ -130,6 +131,23 @@ def load_user_watchlist() -> dict:
 def save_user_watchlist(wl: dict) -> None:
     with open(USER_WATCHLIST_FILE, "w", encoding="utf-8") as f:
         json.dump({"watchlist": wl}, f, ensure_ascii=False, indent=2)
+
+
+def load_portfolios() -> dict:
+    if not os.path.exists(PORTFOLIOS_FILE):
+        return {"persons": {}}
+    try:
+        with open(PORTFOLIOS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+            persons = data.get("persons", {})
+            return {"persons": persons if isinstance(persons, dict) else {}}
+    except Exception:
+        return {"persons": {}}
+
+
+def save_portfolios(persons: dict) -> None:
+    with open(PORTFOLIOS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"persons": persons}, f, ensure_ascii=False, indent=2)
 
 
 def _check_watchlist_depth(node, depth: int = 0) -> None:
@@ -546,6 +564,23 @@ def get_user_watchlist():
 def put_user_watchlist(body: UserWatchlistBody):
     _check_watchlist_depth(body.watchlist)
     save_user_watchlist(body.watchlist)
+    return {"status": "ok"}
+
+
+# ─── Portfolios (資產管理) ─────────────────────────────────────────────────────
+# Per-person holdings; each holding has a symbol/name and one-or-more purchase lots.
+# Read is public (front-end gates the tab behind the stock key); writes need it.
+
+class PortfoliosBody(BaseModel):
+    persons: dict
+
+@app.get("/api/portfolios")
+def get_portfolios():
+    return load_portfolios()
+
+@app.put("/api/portfolios", dependencies=[Depends(_require_stock_auth)])
+def put_portfolios(body: PortfoliosBody):
+    save_portfolios(body.persons)
     return {"status": "ok"}
 
 

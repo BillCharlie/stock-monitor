@@ -8,6 +8,8 @@ backend/*.pyo
 backend/reports/
 backend/custom_stocks.json
 backend/user_watchlist.json
+backend/portfolios.json
+backend/refresh_status.json
 backend/stock_cache/
 backend/cache/
 backend/data/

@@ -143,6 +143,15 @@ export const api = {
     body: JSON.stringify({ watchlist }),
   }),
 
+  // Portfolios (資產管理)
+  getPortfolios: () => request('/portfolios'),
+
+  savePortfolios: async (persons) => request('/portfolios', {
+    method: 'PUT',
+    headers: await stockHeaders(),
+    body: JSON.stringify({ persons }),
+  }),
+
   pingAuth: async (type) => request('/auth/ping', {
     method: 'POST',
     headers: await (type === 'report' ? reportHeaders() : stockHeaders()),

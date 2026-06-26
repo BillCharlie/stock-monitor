@@ -64,13 +64,14 @@ function syncPriceScaleWidths(charts) {
   setTimeout(doSync, 500)
 }
 
-export default function StockChart({ symbol, stockName, interval }) {
+export default function StockChart({ symbol, stockName, interval, marks }) {
   const mainRef    = useRef(null)
   const volRef     = useRef(null)
   const rsiRef     = useRef(null)
   const kdRef      = useRef(null)
   const chartsRef  = useRef(null)
   const seriesRef  = useRef(null)
+  const priceLinesRef = useRef([])
 
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState(null)
@@ -180,6 +181,45 @@ export default function StockChart({ symbol, stockName, interval }) {
     }
   }, [])
 
+  // ── Buy-point overlays (dashed price lines + dated markers) ─────────────────
+  const applyMarks = useCallback(() => {
+    const candle = seriesRef.current?.candle
+    if (!candle) return
+    // Clear previous overlays
+    priceLinesRef.current.forEach(pl => { try { candle.removePriceLine(pl) } catch {} })
+    priceLinesRef.current = []
+
+    const list = Array.isArray(marks) ? marks.filter(m => m && m.price != null) : []
+    if (!list.length) {
+      try { candle.setMarkers([]) } catch {}
+      return
+    }
+
+    for (const m of list) {
+      const pl = candle.createPriceLine({
+        price: Number(m.price),
+        color: '#FFD600',
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: m.label || '買入',
+      })
+      priceLinesRef.current.push(pl)
+    }
+
+    const markers = list
+      .filter(m => m.time)
+      .map(m => ({
+        time: m.time,
+        position: 'belowBar',
+        color: '#FFD600',
+        shape: 'arrowUp',
+        text: `${m.label ? m.label + ' ' : ''}${Number(m.price)}`,
+      }))
+      .sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
+    try { candle.setMarkers(markers) } catch {}
+  }, [marks])
+
   // ── Load data ─────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
     if (!seriesRef.current || !symbol) return
@@ -227,14 +267,18 @@ export default function StockChart({ symbol, stockName, interval }) {
       chartsRef.current.main.timeScale().fitContent()
       const { main, vol, rsi, kd } = chartsRef.current
       syncPriceScaleWidths([main, vol, rsi, kd])
+      applyMarks()
     } catch (e) {
       setError(e.message)
     } finally {
       setLoading(false)
     }
-  }, [symbol, interval])
+  }, [symbol, interval, applyMarks])
 
   useEffect(() => { loadData() }, [loadData])
+
+  // Reapply overlays when marks change (data already loaded)
+  useEffect(() => { applyMarks() }, [applyMarks])
 
   // ── Toggle MA visibility ──────────────────────────────────────────────────
   useEffect(() => {
