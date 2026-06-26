@@ -304,6 +304,12 @@ WATCHLIST = {
                 "name_en": "BYD Company Limited",
                 "tags": ["A股", "新能源汽車", "動力電池"],
             },
+            {
+                "symbol": "601127.SS",
+                "name": "賽力斯",
+                "name_en": "Seres Group Co., Ltd.",
+                "tags": ["A股", "新能源汽車", "問界/華為合作"],
+            },
         ],
         "半導體": {
             "晶圓代工": [
@@ -321,8 +327,72 @@ WATCHLIST = {
                     "name_en": "Hangzhou Silan Microelectronics Co., Ltd.",
                     "tags": ["A股", "功率半導體IDM", "MCU/IGBT/SiC"],
                 },
+                {
+                    "symbol": "688396.SS",
+                    "name": "華潤微",
+                    "name_en": "China Resources Microelectronics Ltd.",
+                    "tags": ["A股", "功率半導體IDM", "MOSFET/IGBT"],
+                },
+                {
+                    "symbol": "603290.SS",
+                    "name": "斯達半導",
+                    "name_en": "StarPower Semiconductor Ltd.",
+                    "tags": ["A股", "IGBT模組龍頭", "車規功率"],
+                },
+                {
+                    "symbol": "300373.SZ",
+                    "name": "揚杰科技",
+                    "name_en": "Yangzhou Yangjie Electronic Technology",
+                    "tags": ["A股", "功率分立器件", "MOSFET/SiC"],
+                },
+                {
+                    "symbol": "02577.HK",
+                    "name": "英諾賽科",
+                    "name_en": "Innoscience (Suzhou) Technology Holding",
+                    "tags": ["港股", "GaN功率IDM", "矽基氮化鎵"],
+                },
+            ],
+            "化合物半導體": [
+                {
+                    "symbol": "600703.SS",
+                    "name": "三安光電",
+                    "name_en": "Sanan Optoelectronics Co., Ltd.",
+                    "tags": ["A股", "化合物半導體", "LED/SiC/GaN"],
+                },
+            ],
+            "矽片材料": [
+                {
+                    "symbol": "605358.SS",
+                    "name": "立昂微",
+                    "name_en": "Hangzhou Lion Microelectronics",
+                    "tags": ["A股", "矽晶圓/外延片", "功率器件"],
+                },
+            ],
+            "射頻IC": [
+                {
+                    "symbol": "300782.SZ",
+                    "name": "卓勝微",
+                    "name_en": "Maxscend Microelectronics Co., Ltd.",
+                    "tags": ["A股", "射頻前端IC", "濾波器/開關"],
+                },
+            ],
+            "封裝測試": [
+                {
+                    "symbol": "600584.SS",
+                    "name": "長電科技",
+                    "name_en": "JCET Group Co., Ltd.",
+                    "tags": ["A股", "全球前三封測", "先進封裝/SiP"],
+                },
             ],
         },
+        "光通訊": [
+            {
+                "symbol": "601869.SS",
+                "name": "長飛光纖",
+                "name_en": "Yangtze Optical Fibre and Cable (YOFC)",
+                "tags": ["A股", "光纖光纜龍頭", "光模組/海纜"],
+            },
+        ],
     },
     "美國": {
         "半導體": {
