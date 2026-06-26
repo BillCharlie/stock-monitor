@@ -6,6 +6,7 @@ import AnalysisPanel from './components/AnalysisPanel.jsx'
 import NewsPanel from './components/NewsPanel.jsx'
 import TrumpNewsPanel from './components/TrumpNewsPanel.jsx'
 import ActiveEtfPanel from './components/ActiveEtfPanel.jsx'
+import PortfolioPanel from './components/PortfolioPanel.jsx'
 import AccessKeyPanel from './components/AccessKeyPanel.jsx'
 import { DataStatusPanel } from './components/AnalysisPanel.jsx'
 import { api, keys } from './api/stocks.js'
@@ -17,7 +18,7 @@ const FONT_SCALES = [
   { label: 'XL', scale: 1.4  },
 ]
 
-const stockKeyTabs = new Set(['analysis', 'activeEtf'])
+const stockKeyTabs = new Set(['analysis', 'activeEtf', 'portfolio'])
 
 export default function App() {
   const [selected, setSelected] = useState({ symbol: '2330.TW', name: '台積電' })
@@ -131,7 +132,7 @@ export default function App() {
         <div style={{ width: sidebarW }} className="relative flex-shrink-0 border-r border-[#2A2A2A]">
           <WatchlistPanel
             onSelect={(symbol, name) => {
-              setSelected({ symbol, name })
+              setSelected({ symbol, name, marks: null })
               setActiveTab('chart')
             }}
             selectedSymbol={selected.symbol}
@@ -153,6 +154,7 @@ export default function App() {
               { id: 'news',     label: '資訊面' },
               { id: 'trumpNews', label: 'TrumpNews' },
               { id: 'activeEtf', label: '主動ETF彙總' },
+              { id: 'portfolio', label: '資產管理' },
               { id: 'dataStatus', label: '數據狀態' },
             ].map(tab => (
               <button
@@ -258,7 +260,7 @@ export default function App() {
 
           <div className="flex-1 min-h-0 overflow-hidden">
             {activeTab === 'chart' && (
-              <StockChart symbol={selected.symbol} stockName={selected.name} interval={interval} />
+              <StockChart symbol={selected.symbol} stockName={selected.name} interval={interval} marks={selected.marks} />
             )}
             {activeTab === 'analysis' && (
               <AnalysisPanel symbol={selected.symbol} stockName={selected.name} mode="single" />
@@ -274,6 +276,15 @@ export default function App() {
             )}
             {activeTab === 'activeEtf' && (
               <ActiveEtfPanel />
+            )}
+            {activeTab === 'portfolio' && (
+              <PortfolioPanel
+                onNeedKey={() => openKeyPanel('stock')}
+                onJumpToChart={(symbol, name, marks) => {
+                  setSelected({ symbol, name, marks })
+                  setActiveTab('chart')
+                }}
+              />
             )}
             {activeTab === 'dataStatus' && (
               <DataStatusPanel />
