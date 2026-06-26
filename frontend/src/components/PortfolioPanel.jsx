@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, keys } from '../api/stocks.js'
+import { api } from '../api/stocks.js'
 
 const DEFAULT_PEOPLE = ['Fiona', 'Bill', 'Yang']
 
@@ -42,7 +42,7 @@ function buildNameIndex(categories) {
   return { byName, list }
 }
 
-export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
+export default function PortfolioPanel({ onJumpToChart }) {
   const [persons, setPersons] = useState({})
   const [activePerson, setActivePerson] = useState('')
   const [nameIndex, setNameIndex] = useState({ byName: new Map(), list: [] })
@@ -50,10 +50,6 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
   const [newPerson, setNewPerson] = useState('')
-
-  // Entry lock: blurred until the (shared) 股票管理密鑰 is present.
-  const [unlocked, setUnlocked] = useState(() => keys.hasStock())
-  const [lockMsg, setLockMsg] = useState('')
 
   // New-holding form (amount is derived from price × shares)
   const [form, setForm] = useState({ name: '', symbol: '', price: '', shares: '', date: todayStr() })
@@ -78,17 +74,6 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
       }
     })()
   }, [])
-
-  // Unlock as soon as the shared 股票管理密鑰 is present. The key is entered in
-  // the global 🔑 panel (same key used everywhere); we just watch for it.
-  useEffect(() => {
-    if (unlocked) return
-    const check = () => { if (keys.hasStock()) { setUnlocked(true); setLockMsg('') } }
-    check()
-    const id = setInterval(check, 500)
-    window.addEventListener('focus', check)
-    return () => { clearInterval(id); window.removeEventListener('focus', check) }
-  }, [unlocked])
 
   // ── Fetch today's close for all symbols of the active person ─────────────────
   const activeHoldings = persons[activePerson] || []
@@ -120,11 +105,7 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
       setTimeout(() => setMsg(m => (m === '✓ 已儲存' ? '' : m)), 1500)
     } catch (e) {
       if (String(e.message).includes('401') || e.message.includes('密鑰')) {
-        // Wrong key — clear it and re-lock so the user is prompted again.
-        keys.setStock('')
-        setMsg('')
-        setLockMsg('⚠ 股票管理密鑰錯誤，請重新輸入')
-        setUnlocked(false)
+        setMsg('⚠ 密鑰錯誤，無法儲存')
       } else {
         setMsg('⚠ 儲存失敗：' + e.message)
       }
@@ -224,8 +205,7 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
   }
 
   return (
-    <div className="relative h-full bg-[#0D0D0D] text-gray-200">
-     <div className={`h-full overflow-y-auto ${unlocked ? '' : 'blur-sm pointer-events-none select-none'}`}>
+    <div className="h-full overflow-y-auto bg-[#0D0D0D] text-gray-200">
       <datalist id="portfolio-stock-names">
         {nameIndex.list.map(e => (
           <option key={e.symbol} value={e.name}>{e.symbol}</option>
@@ -445,25 +425,6 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
                  font-size:12px; color:#fff; outline:none; }
         .input:focus { border-color:#3b82f6; }
       `}</style>
-     </div>
-
-      {/* Entry lock overlay — uses the shared 股票管理密鑰 */}
-      {!unlocked && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40">
-          <div className="bg-[#1A1A1A] border border-[#333] rounded-lg p-6 w-80 shadow-2xl text-center">
-            <div className="text-3xl mb-2">🔒</div>
-            <h2 className="text-white font-semibold text-base mb-1">資產管理已鎖定</h2>
-            <p className="text-gray-500 text-xs mb-4">需輸入股票管理密鑰才能查看與編輯。</p>
-            {lockMsg && <p className="text-xs mb-3 text-yellow-400">{lockMsg}</p>}
-            <button
-              onClick={() => onNeedKey?.()}
-              className="w-full py-1.5 rounded text-xs bg-blue-700 hover:bg-blue-600 text-white transition-colors"
-            >
-              輸入股票管理密鑰
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
