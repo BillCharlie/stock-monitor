@@ -16,6 +16,9 @@ const num = (v) => {
 const fmtMoney = (n) =>
   n == null ? '—' : n.toLocaleString('en-US', { maximumFractionDigits: 0 })
 const fmtPts = (n) => (n == null ? '—' : (n >= 0 ? '+' : '') + n.toFixed(2))
+// Invested amount is derived: 買入點 × 股數
+const calcAmount = (price, shares) =>
+  price != null && shares != null ? price * shares : null
 
 // Flatten the nested watchlist response into a name -> {symbol, name} index.
 function buildNameIndex(categories) {
@@ -48,8 +51,12 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
   const [msg, setMsg] = useState('')
   const [newPerson, setNewPerson] = useState('')
 
-  // New-holding form
-  const [form, setForm] = useState({ name: '', symbol: '', price: '', amount: '', shares: '', date: todayStr() })
+  // Entry lock: blurred until the (shared) 股票管理密鑰 is present.
+  const [unlocked, setUnlocked] = useState(() => keys.hasStock())
+  const [lockMsg, setLockMsg] = useState('')
+
+  // New-holding form (amount is derived from price × shares)
+  const [form, setForm] = useState({ name: '', symbol: '', price: '', shares: '', date: todayStr() })
   // Add-lot form keyed by holding index
   const [lotForms, setLotForms] = useState({})
 
@@ -71,6 +78,17 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
       }
     })()
   }, [])
+
+  // Unlock as soon as the shared 股票管理密鑰 is present. The key is entered in
+  // the global 🔑 panel (same key used everywhere); we just watch for it.
+  useEffect(() => {
+    if (unlocked) return
+    const check = () => { if (keys.hasStock()) { setUnlocked(true); setLockMsg('') } }
+    check()
+    const id = setInterval(check, 500)
+    window.addEventListener('focus', check)
+    return () => { clearInterval(id); window.removeEventListener('focus', check) }
+  }, [unlocked])
 
   // ── Fetch today's close for all symbols of the active person ─────────────────
   const activeHoldings = persons[activePerson] || []
@@ -95,24 +113,23 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
   // ── Persist helper ───────────────────────────────────────────────────────────
   const persist = useCallback(async (next) => {
     setPersons(next)
-    if (!keys.getStock().trim()) {
-      setMsg('請先輸入股票管理密鑰才能儲存')
-      onNeedKey?.()
-      return
-    }
+    setMsg('儲存中...')
     try {
       await api.savePortfolios(next)
-      setMsg('已儲存')
-      setTimeout(() => setMsg(''), 1500)
+      setMsg('✓ 已儲存')
+      setTimeout(() => setMsg(m => (m === '✓ 已儲存' ? '' : m)), 1500)
     } catch (e) {
       if (String(e.message).includes('401') || e.message.includes('密鑰')) {
-        setMsg('密鑰錯誤，無法儲存')
-        onNeedKey?.()
+        // Wrong key — clear it and re-lock so the user is prompted again.
+        keys.setStock('')
+        setMsg('')
+        setLockMsg('⚠ 股票管理密鑰錯誤，請重新輸入')
+        setUnlocked(false)
       } else {
-        setMsg('儲存失敗：' + e.message)
+        setMsg('⚠ 儲存失敗：' + e.message)
       }
     }
-  }, [onNeedKey])
+  }, [])
 
   // ── Person actions ────────────────────────────────────────────────────────────
   const addPerson = (name) => {
@@ -145,9 +162,10 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
     const symbol = (form.symbol || '').trim().toUpperCase()
     const name = form.name.trim() || nameIndex.byName.get(symbol)?.name || symbol
     if (!symbol) { setMsg('請輸入股票名稱或代號'); return }
+    const price = num(form.price), shares = num(form.shares)
     const lot = {
-      price: num(form.price), amount: num(form.amount),
-      shares: num(form.shares), date: form.date || todayStr(),
+      price, shares, amount: calcAmount(price, shares),
+      date: form.date || todayStr(),
     }
     const holdings = [...(persons[activePerson] || [])]
     const idx = holdings.findIndex(h => h.symbol === symbol)
@@ -157,12 +175,13 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
       holdings.push({ symbol, name, lots: [lot] })
     }
     persist({ ...persons, [activePerson]: holdings })
-    setForm({ name: '', symbol: '', price: '', amount: '', shares: '', date: todayStr() })
+    setForm({ name: '', symbol: '', price: '', shares: '', date: todayStr() })
   }
 
   const addLot = (hIdx) => {
     const lf = lotForms[hIdx] || {}
-    const lot = { price: num(lf.price), amount: num(lf.amount), shares: num(lf.shares), date: lf.date || todayStr() }
+    const price = num(lf.price), shares = num(lf.shares)
+    const lot = { price, shares, amount: calcAmount(price, shares), date: lf.date || todayStr() }
     const holdings = persons[activePerson].map((h, i) =>
       i === hIdx ? { ...h, lots: [...h.lots, lot] } : h
     )
@@ -205,7 +224,8 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-[#0D0D0D] text-gray-200">
+    <div className="relative h-full bg-[#0D0D0D] text-gray-200">
+     <div className={`h-full overflow-y-auto ${unlocked ? '' : 'blur-sm pointer-events-none select-none'}`}>
       <datalist id="portfolio-stock-names">
         {nameIndex.list.map(e => (
           <option key={e.symbol} value={e.name}>{e.symbol}</option>
@@ -216,7 +236,11 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
         {/* Header */}
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <h2 className="text-white font-semibold text-base mr-2">資產管理</h2>
-          {msg && <span className="text-xs text-green-400">{msg}</span>}
+          {msg && (
+            <span className={`text-xs ${msg.startsWith('⚠') ? 'text-yellow-400' : 'text-green-400'}`}>
+              {msg}
+            </span>
+          )}
         </div>
 
         {/* Person tabs */}
@@ -298,11 +322,13 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
                 <Field label="買入點">
                   <input value={form.price} onChange={e => setForm(f => ({ ...f, price: e.target.value }))} type="number" className="w-20 input" />
                 </Field>
-                <Field label="投資資金">
-                  <input value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} type="number" className="w-24 input" />
-                </Field>
                 <Field label="股數">
                   <input value={form.shares} onChange={e => setForm(f => ({ ...f, shares: e.target.value }))} type="number" className="w-20 input" />
+                </Field>
+                <Field label="投資資金（自動）">
+                  <div className="w-24 px-2 py-1 text-xs text-gray-400 bg-[#0A0A0A] border border-[#222] rounded">
+                    {fmtMoney(calcAmount(num(form.price), num(form.shares)))}
+                  </div>
                 </Field>
                 <Field label="日期">
                   <input value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} type="date" className="w-36 input" />
@@ -398,7 +424,7 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
                         <tr className="border-b border-[#222] bg-[#0F0F0F]">
                           <td className="py-1 px-2 pl-5 text-gray-600">+ 新增購買</td>
                           <td className="px-2"><input value={lf.price || ''} onChange={e => setLotForms(p => ({ ...p, [hIdx]: { ...lf, price: e.target.value } }))} type="number" placeholder="點" className="w-16 input" /></td>
-                          <td className="px-2"><input value={lf.amount || ''} onChange={e => setLotForms(p => ({ ...p, [hIdx]: { ...lf, amount: e.target.value } }))} type="number" placeholder="資金" className="w-20 input" /></td>
+                          <td className="px-2 text-right text-gray-500">{fmtMoney(calcAmount(num(lf.price), num(lf.shares)))}</td>
                           <td className="px-2"><input value={lf.shares || ''} onChange={e => setLotForms(p => ({ ...p, [hIdx]: { ...lf, shares: e.target.value } }))} type="number" placeholder="股" className="w-16 input" /></td>
                           <td className="px-2"><input value={lf.date || todayStr()} onChange={e => setLotForms(p => ({ ...p, [hIdx]: { ...lf, date: e.target.value } }))} type="date" className="w-32 input" /></td>
                           <td colSpan={3}></td>
@@ -419,6 +445,25 @@ export default function PortfolioPanel({ onNeedKey, onJumpToChart }) {
                  font-size:12px; color:#fff; outline:none; }
         .input:focus { border-color:#3b82f6; }
       `}</style>
+     </div>
+
+      {/* Entry lock overlay — uses the shared 股票管理密鑰 */}
+      {!unlocked && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40">
+          <div className="bg-[#1A1A1A] border border-[#333] rounded-lg p-6 w-80 shadow-2xl text-center">
+            <div className="text-3xl mb-2">🔒</div>
+            <h2 className="text-white font-semibold text-base mb-1">資產管理已鎖定</h2>
+            <p className="text-gray-500 text-xs mb-4">需輸入股票管理密鑰才能查看與編輯。</p>
+            {lockMsg && <p className="text-xs mb-3 text-yellow-400">{lockMsg}</p>}
+            <button
+              onClick={() => onNeedKey?.()}
+              className="w-full py-1.5 rounded text-xs bg-blue-700 hover:bg-blue-600 text-white transition-colors"
+            >
+              輸入股票管理密鑰
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

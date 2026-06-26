@@ -5,6 +5,8 @@ Each indicator returns a score in [-2, 2]; weighted sum determines overall ratin
 from __future__ import annotations
 
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import numpy as np
@@ -545,11 +547,31 @@ def generate_daily_report(watchlist: dict) -> dict:
     sector_scores: dict[str, list[float]] = {}
     market_results: dict[str, dict[str, dict]] = {}
 
+    # Dedup first (same stock may appear in several sub-categories) keeping the
+    # first path seen, so each symbol is analyzed exactly once.
+    unique: list[tuple[str, dict]] = []
+    seen: set[str] = set()
     for path, s in all_items:
         symbol = s["symbol"]
-        if symbol in all_results:
-            continue  # skip duplicates (same stock in multiple sub-categories)
-        result = analyze_stock(symbol, s.get("name", ""))
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        unique.append((path, s))
+
+    # analyze_stock is I/O-bound (yfinance + 三大法人 fetches) and has no shared
+    # mutable state, so run the analyses concurrently. Without this, ~300 stocks
+    # are fetched serially and the report takes 10-20 min — long enough that the
+    # HTTP trigger and the front-end both time out. Accumulation stays single-
+    # threaded below to keep results deterministic.
+    max_workers = max(1, int(os.getenv("REPORT_MAX_WORKERS", "8")))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(
+            lambda item: (item[0], item[1], analyze_stock(item[1]["symbol"], item[1].get("name", ""))),
+            unique,
+        ))
+
+    for path, s, result in results:
+        symbol = s["symbol"]
         if "error" in result:
             continue
         # accumulate per top-level sector (first component of path)

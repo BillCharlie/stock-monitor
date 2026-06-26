@@ -1092,21 +1092,53 @@ function SingleAnalysis({ symbol, stockName }) {
   )
 }
 
-function ChinaMarketReportSection({ section }) {
+// Generic per-market report block (台灣 / 中國 / 美國). Each market is rendered
+// as a self-contained section: sentiment header, per-market buy/risk picks, the
+// detailed per-stock cards, and any extra content (e.g. TrumpNews for 美國).
+function MarketReportSection({ flag, title, section, children }) {
   const results = Object.values(section?.results || {}).sort((a, b) => b.score - a.score)
+  const buys  = results.filter(r => r.rating_key === 'strong_buy' || r.rating_key === 'buy').slice(0, 5)
+  const risks = results.filter(r => r.rating_key === 'strong_sell' || r.rating_key === 'sell')
+    .sort((a, b) => a.score - b.score).slice(0, 5)
 
   return (
     <div className="rounded border border-red-950 bg-[#160B0B] p-3">
       <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="text-sm font-semibold text-red-300">🇨🇳 中國股市</div>
+        <div className="text-sm font-semibold text-red-300">{flag} {title}</div>
         <div className={`text-[10px] font-semibold ${
           section?.sentiment === '多頭' ? 'text-[#EF5350]' :
           section?.sentiment === '空頭' ? 'text-[#26A69A]' : 'text-[#FFA726]'
         }`}>
           {section?.sentiment || '暫無資料'}
           {section?.avg_score != null && ` (${section.avg_score > 0 ? '+' : ''}${section.avg_score})`}
+          {section?.count != null && ` · ${section.count} 檔`}
         </div>
       </div>
+
+      {/* Per-market buy / risk picks */}
+      {(buys.length > 0 || risks.length > 0) && (
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <div>
+            <div className="text-[10px] font-semibold text-[#EF5350] mb-1">買入機會</div>
+            {buys.length > 0 ? buys.map((s, i) => (
+              <div key={s.symbol} className="flex items-center justify-between text-[10px] px-1.5 py-0.5">
+                <span className="text-gray-300 truncate">#{i+1} {s.name}</span>
+                <span className={`font-semibold rating-${s.rating_key}`}>{s.rating}</span>
+              </div>
+            )) : <div className="text-[10px] text-gray-600 px-1.5">—</div>}
+          </div>
+          <div>
+            <div className="text-[10px] font-semibold text-[#26A69A] mb-1">風險警示</div>
+            {risks.length > 0 ? risks.map((s, i) => (
+              <div key={s.symbol} className="flex items-center justify-between text-[10px] px-1.5 py-0.5">
+                <span className="text-gray-300 truncate">#{i+1} {s.name}</span>
+                <span className="font-semibold rating-sell">{s.rating}</span>
+              </div>
+            )) : <div className="text-[10px] text-gray-600 px-1.5">—</div>}
+          </div>
+        </div>
+      )}
+
       {results.length > 0 ? (
         <div className="space-y-2">
           {results.map(r => (
@@ -1132,11 +1164,21 @@ function ChinaMarketReportSection({ section }) {
           ))}
         </div>
       ) : (
-        <div className="text-[10px] text-gray-600">本次沒有可用的中國股市技術分析資料。</div>
+        <div className="text-[10px] text-gray-600">本次沒有可用的{title}技術分析資料。</div>
       )}
+
+      {children}
     </div>
   )
 }
+
+// Fixed render order for the daily report's market blocks. `key` must match the
+// top-level watchlist categories that the backend uses for market_sections.
+const MARKET_BLOCKS = [
+  { key: '台灣',     flag: '🇹🇼', title: '台灣股市' },
+  { key: '中國股市', flag: '🇨🇳', title: '中國股市' },
+  { key: '美國',     flag: '🇺🇸', title: '美國股市' },
+]
 
 function DailyReport({ refreshToken = 0 }) {
   const [report, setReport] = useState(null)
@@ -1181,89 +1223,30 @@ function DailyReport({ refreshToken = 0 }) {
         </div>
       </div>
 
-      {/* Top Opportunities */}
-      {report.top_opportunities?.length > 0 && (
-        <div>
-          <div className="text-sm font-semibold text-[#EF5350] mb-2">買入機會 TOP 5</div>
-          <div className="space-y-1">
-            {report.top_opportunities.map((s, i) => (
-              <div key={s.symbol} className="flex items-center justify-between bg-[#0A1A0A] rounded px-3 py-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-gray-600">#{i+1}</span>
-                  <span className="text-xs text-white">{s.name}</span>
-                  <span className="text-[10px] text-gray-500">{s.symbol}</span>
-                </div>
-                <span className={`text-xs font-bold rating-${s.rating?.includes('強力') && s.score > 0 ? 'strong_buy' : 'buy'}`}>{s.rating}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Top Risks */}
-      {report.top_risks?.length > 0 && (
-        <div>
-          <div className="text-sm font-semibold text-[#26A69A] mb-2">風險警示 TOP 5</div>
-          <div className="space-y-1">
-            {report.top_risks.map((s, i) => (
-              <div key={s.symbol} className="flex items-center justify-between bg-[#1A0A0A] rounded px-3 py-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-gray-600">#{i+1}</span>
-                  <span className="text-xs text-white">{s.name}</span>
-                  <span className="text-[10px] text-gray-500">{s.symbol}</span>
-                </div>
-                <span className="text-xs font-bold rating-sell">{s.rating}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Sector Summary */}
-      <div>
-        <div className="text-sm font-semibold text-gray-300 mb-2">板塊情緒總覽</div>
-        <div className="grid grid-cols-2 gap-1.5">
-          {Object.entries(report.sector_summary || {}).map(([sector, info]) => (
-            <div key={sector} className="bg-[#141414] rounded px-2 py-1.5 flex items-center justify-between">
-              <span className="text-[10px] text-gray-400 truncate">{sector}</span>
-              <span className={`text-[10px] font-semibold ml-2 flex-shrink-0 ${
-                info.sentiment === '多頭' ? 'text-[#EF5350]' :
-                info.sentiment === '空頭' ? 'text-[#26A69A]' : 'text-[#FFA726]'
+      {/* Cross-market sentiment overview */}
+      <div className="grid grid-cols-3 gap-1.5">
+        {MARKET_BLOCKS.map(({ key, flag, title }) => {
+          const sec = report.market_sections?.[key]
+          return (
+            <div key={key} className="bg-[#141414] rounded px-2 py-1.5">
+              <div className="text-[10px] text-gray-400 truncate">{flag} {title}</div>
+              <div className={`text-[11px] font-semibold ${
+                sec?.sentiment === '多頭' ? 'text-[#EF5350]' :
+                sec?.sentiment === '空頭' ? 'text-[#26A69A]' : 'text-[#FFA726]'
               }`}>
-                {info.sentiment} ({info.avg_score > 0 ? '+' : ''}{info.avg_score})
-              </span>
+                {sec?.sentiment || '—'}{sec?.avg_score != null && ` (${sec.avg_score > 0 ? '+' : ''}${sec.avg_score})`}
+              </div>
             </div>
-          ))}
-        </div>
+          )
+        })}
       </div>
 
-      {/* Dedicated China market block */}
-      <ChinaMarketReportSection section={report.market_sections?.['中國股市']} />
-
-      <TrumpNewsReportSummary data={report.trump_news} />
-
-      {/* All stock summaries */}
-      {report.all_results && (
-        <div>
-          <div className="text-sm font-semibold text-gray-300 mb-2">個股摘要</div>
-          <div className="space-y-0.5 max-h-96 overflow-y-auto">
-            {Object.values(report.all_results).sort((a, b) => b.score - a.score).map(r => (
-              <div key={r.symbol} className="flex items-center justify-between px-2 py-1 rounded hover:bg-[#1A1A1A]">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-white w-16 truncate">{r.name}</span>
-                  <span className="text-[10px] text-gray-600 w-20">{r.symbol}</span>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className={`text-[10px] ${r.daily_change_pct >= 0 ? 'text-[#EF5350]' : 'text-[#26A69A]'}`}>
-                    {r.daily_change_pct >= 0 ? '+' : ''}{r.daily_change_pct?.toFixed(2)}%
-                  </span>
-                  <span className={`text-[10px] font-semibold rating-${r.rating_key}`}>{r.rating}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Three self-contained market blocks: 台灣 / 中國 / 美國 (TrumpNews under 美國) */}
+      {MARKET_BLOCKS.map(({ key, flag, title }) => (
+        <MarketReportSection key={key} flag={flag} title={title} section={report.market_sections?.[key]}>
+          {key === '美國' && <div className="mt-3"><TrumpNewsReportSummary data={report.trump_news} /></div>}
+        </MarketReportSection>
+      ))}
 
       <div className="text-[10px] text-gray-700 pt-2">
         ⚠ 本報告完全基於技術指標數學模型自動生成，不構成任何投資建議。
