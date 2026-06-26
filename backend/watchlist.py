@@ -314,6 +314,14 @@ WATCHLIST = {
                     "tags": ["A股", "特色工藝晶圓代工", "功率半導體/MEMS"],
                 },
             ],
+            "功率半導體": [
+                {
+                    "symbol": "600460.SS",
+                    "name": "士蘭微",
+                    "name_en": "Hangzhou Silan Microelectronics Co., Ltd.",
+                    "tags": ["A股", "功率半導體IDM", "MCU/IGBT/SiC"],
+                },
+            ],
         },
     },
     "美國": {
