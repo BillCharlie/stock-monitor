@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import urllib.parse
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -361,6 +362,11 @@ def generate_gpt_report(
             temperature=0.4,
         )
         html_content = response.choices[0].message.content.strip()
+        # GPT often wraps the HTML in a ```html … ``` markdown fence; strip it so
+        # the email/page don't render the literal fence markers.
+        if html_content.startswith("```"):
+            html_content = re.sub(r"^```[a-zA-Z]*\s*", "", html_content)
+            html_content = re.sub(r"\s*```$", "", html_content).strip()
         logger.info(f"GPT report generated: {len(html_content)} chars")
         return html_content
     except Exception as e:
