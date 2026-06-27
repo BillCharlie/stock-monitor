@@ -132,7 +132,7 @@ export default function App() {
         <div style={{ width: sidebarW }} className="relative flex-shrink-0 border-r border-[#2A2A2A]">
           <WatchlistPanel
             onSelect={(symbol, name) => {
-              setSelected({ symbol, name, marks: null })
+              setSelected({ symbol, name, marks: null, levels: null })
               setActiveTab('chart')
             }}
             selectedSymbol={selected.symbol}
@@ -260,7 +260,7 @@ export default function App() {
 
           <div className="flex-1 min-h-0 overflow-hidden">
             {activeTab === 'chart' && (
-              <StockChart symbol={selected.symbol} stockName={selected.name} interval={interval} marks={selected.marks} />
+              <StockChart symbol={selected.symbol} stockName={selected.name} interval={interval} marks={selected.marks} levels={selected.levels} />
             )}
             {activeTab === 'analysis' && (
               <AnalysisPanel symbol={selected.symbol} stockName={selected.name} mode="single" />
@@ -280,8 +280,8 @@ export default function App() {
             {activeTab === 'portfolio' && (
               <PortfolioPanel
                 onNeedKey={() => openKeyPanel('stock')}
-                onJumpToChart={(symbol, name, marks) => {
-                  setSelected({ symbol, name, marks })
+                onJumpToChart={(symbol, name, marks, levels) => {
+                  setSelected({ symbol, name, marks, levels })
                   setActiveTab('chart')
                 }}
               />

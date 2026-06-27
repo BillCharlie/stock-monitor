@@ -20,6 +20,25 @@ const fmtPts = (n) => (n == null ? '—' : (n >= 0 ? '+' : '') + n.toFixed(2))
 const calcAmount = (price, shares) =>
   price != null && shares != null ? price * shares : null
 
+// Aggregate a holding's lots: total shares/amount and weighted average buy price.
+const holdingStats = (h) => {
+  let totalShares = 0, totalAmount = 0
+  for (const l of h.lots || []) {
+    const shares = l.shares
+    const amount = l.amount != null ? l.amount : calcAmount(l.price, l.shares)
+    if (shares != null) totalShares += shares
+    if (amount != null) totalAmount += amount
+  }
+  const avg = totalShares > 0 ? totalAmount / totalShares : null
+  return { totalShares, totalAmount, avg }
+}
+const round2 = (n) => (n == null ? null : Math.round(n * 100) / 100)
+// Stop-loss / take-profit price from average and a percentage.
+const stopLossPrice = (avg, pct) =>
+  avg != null && pct != null ? round2(avg * (1 - pct / 100)) : null
+const takeProfitPrice = (avg, pct) =>
+  avg != null && pct != null ? round2(avg * (1 + pct / 100)) : null
+
 // Flatten the nested watchlist response into a name -> {symbol, name} index.
 function buildNameIndex(categories) {
   const byName = new Map()
@@ -182,14 +201,35 @@ export default function PortfolioPanel({ onJumpToChart }) {
     persist({ ...persons, [activePerson]: holdings })
   }
 
-  // ── Jump to chart with buy-point marks ─────────────────────────────────────────
+  // Patch a holding locally (e.g. stop-loss/take-profit %); save on blur.
+  const patchHolding = (hIdx, patch) => {
+    setPersons(prev => ({
+      ...prev,
+      [activePerson]: (prev[activePerson] || []).map((h, i) => i === hIdx ? { ...h, ...patch } : h),
+    }))
+  }
+  const saveNow = () => persist(persons)
+
+  // ── Jump to chart with buy-point marks + reference levels ───────────────────────
   const jumpLot = (h, lot) =>
-    onJumpToChart?.(h.symbol, h.name, lot.price != null ? [{ time: lot.date, price: lot.price, label: lot.date }] : [])
+    onJumpToChart?.(h.symbol, h.name,
+      lot.price != null ? [{ time: lot.date, price: lot.price, label: lot.date }] : [], [])
+
+  const holdingLevels = (h) => {
+    const { avg } = holdingStats(h)
+    const levels = []
+    if (avg != null) levels.push({ price: round2(avg), color: '#40C4FF', title: `均價 ${round2(avg)}`, dashed: false })
+    const sl = stopLossPrice(avg, num(h.stopLossPct))
+    if (sl != null) levels.push({ price: sl, color: LOSS, title: `停損 ${sl}`, dashed: true })
+    const tp = takeProfitPrice(avg, num(h.takeProfitPct))
+    if (tp != null) levels.push({ price: tp, color: GAIN, title: `停漲 ${tp}`, dashed: true })
+    return levels
+  }
 
   const jumpHolding = (h) =>
-    onJumpToChart?.(h.symbol, h.name, h.lots
-      .filter(l => l.price != null)
-      .map(l => ({ time: l.date, price: l.price, label: l.date })))
+    onJumpToChart?.(h.symbol, h.name,
+      h.lots.filter(l => l.price != null).map(l => ({ time: l.date, price: l.price, label: l.date })),
+      holdingLevels(h))
 
   const lotPL = (lot, close) => {
     if (lot.price == null || close == null) return { pts: null, money: null }
@@ -348,26 +388,67 @@ export default function PortfolioPanel({ onJumpToChart }) {
                       return money == null ? acc : acc + money
                     }, 0)
                     const plColor = totalPL > 0 ? GAIN : totalPL < 0 ? LOSS : FLAT
+                    const { totalShares, totalAmount, avg } = holdingStats(h)
+                    const avgPts = (avg != null && close != null) ? close - avg : null
+                    const avgColor = avgPts == null ? '#888' : avgPts > 0 ? GAIN : avgPts < 0 ? LOSS : FLAT
+                    const sl = stopLossPrice(avg, num(h.stopLossPct))
+                    const tp = takeProfitPrice(avg, num(h.takeProfitPct))
                     const lf = lotForms[hIdx] || { date: todayStr() }
                     return (
                       <FragmentRows key={h.symbol + hIdx}>
-                        {/* Holding header row */}
-                        <tr className="bg-[#15171A] border-b border-[#222]">
+                        {/* Holding header row — aggregate stats by 均價 */}
+                        <tr className="bg-[#15171A] border-b border-[#1f1f1f]">
                           <td className="py-1.5 px-2">
                             <button
                               onClick={() => jumpHolding(h)}
                               className="text-blue-300 hover:text-blue-200 font-semibold"
-                              title="查看圖表並標出所有買入點"
+                              title="查看圖表並標出均價、停損/停漲與所有買入點"
                             >
                               {h.name} <span className="text-gray-500 font-normal">{h.symbol}</span>
                             </button>
                           </td>
-                          <td colSpan={4} className="px-2 text-gray-500">共 {h.lots.length} 筆買入</td>
+                          <td className="px-2 text-right font-semibold text-[#40C4FF]" title="加權平均買入點">
+                            均 {avg == null ? '—' : round2(avg)}
+                          </td>
+                          <td className="px-2 text-right text-gray-300">{fmtMoney(totalAmount)}</td>
+                          <td className="px-2 text-right text-gray-300">{totalShares || '—'}</td>
+                          <td className="px-2 text-gray-500">共 {h.lots.length} 筆</td>
                           <td className="px-2 text-right text-gray-300">{close == null ? '—' : close}</td>
-                          <td className="px-2"></td>
+                          <td className="px-2 text-right font-semibold" style={{ color: avgColor }}>{fmtPts(avgPts)}</td>
                           <td className="px-2 text-right font-semibold" style={{ color: plColor }}>{fmtMoney(totalPL)}</td>
                           <td className="px-2 text-right">
                             <button onClick={() => removeHolding(hIdx)} className="text-gray-600 hover:text-red-400" title="刪除此股">🗑</button>
+                          </td>
+                        </tr>
+
+                        {/* Stop-loss / take-profit settings row */}
+                        <tr className="bg-[#101216] border-b border-[#222]">
+                          <td className="px-2 pl-3 text-[11px] text-gray-600">停損 / 停漲</td>
+                          <td colSpan={8} className="px-2 py-1">
+                            <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px]">
+                              <span className="flex items-center gap-1" style={{ color: LOSS }}>
+                                停損
+                                <input
+                                  type="number" value={h.stopLossPct ?? ''}
+                                  onChange={e => patchHolding(hIdx, { stopLossPct: e.target.value })}
+                                  onBlur={saveNow}
+                                  placeholder="%" className="w-14 input text-right"
+                                />
+                                <span className="text-gray-500">% →</span>
+                                <span>停損點 {sl == null ? '—' : sl}</span>
+                              </span>
+                              <span className="flex items-center gap-1" style={{ color: GAIN }}>
+                                停漲
+                                <input
+                                  type="number" value={h.takeProfitPct ?? ''}
+                                  onChange={e => patchHolding(hIdx, { takeProfitPct: e.target.value })}
+                                  onBlur={saveNow}
+                                  placeholder="%" className="w-14 input text-right"
+                                />
+                                <span className="text-gray-500">% →</span>
+                                <span>停漲點 {tp == null ? '—' : tp}</span>
+                              </span>
+                            </div>
                           </td>
                         </tr>
 

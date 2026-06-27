@@ -64,7 +64,7 @@ function syncPriceScaleWidths(charts) {
   setTimeout(doSync, 500)
 }
 
-export default function StockChart({ symbol, stockName, interval, marks }) {
+export default function StockChart({ symbol, stockName, interval, marks, levels }) {
   const mainRef    = useRef(null)
   const volRef     = useRef(null)
   const rsiRef     = useRef(null)
@@ -72,6 +72,7 @@ export default function StockChart({ symbol, stockName, interval, marks }) {
   const chartsRef  = useRef(null)
   const seriesRef  = useRef(null)
   const priceLinesRef = useRef([])
+  const levelLinesRef = useRef([])
 
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState(null)
@@ -80,8 +81,12 @@ export default function StockChart({ symbol, stockName, interval, marks }) {
   )
   const [showBB, setShowBB] = useState(true)
   const [showOBV, setShowOBV] = useState(true)
+  const [showMarks, setShowMarks] = useState(true)
   const [ohlcInfo, setOhlcInfo] = useState(null)
   const [lastUpdated, setLastUpdated] = useState('')
+
+  // Default to showing buy points each time a new set of marks arrives.
+  useEffect(() => { setShowMarks(true) }, [marks])
 
   // ── Initialize charts (once) ──────────────────────────────────────────────
   useEffect(() => {
@@ -189,7 +194,7 @@ export default function StockChart({ symbol, stockName, interval, marks }) {
     priceLinesRef.current.forEach(pl => { try { candle.removePriceLine(pl) } catch {} })
     priceLinesRef.current = []
 
-    const list = Array.isArray(marks) ? marks.filter(m => m && m.price != null) : []
+    const list = (showMarks && Array.isArray(marks)) ? marks.filter(m => m && m.price != null) : []
     if (!list.length) {
       try { candle.setMarkers([]) } catch {}
       return
@@ -218,7 +223,28 @@ export default function StockChart({ symbol, stockName, interval, marks }) {
       }))
       .sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
     try { candle.setMarkers(markers) } catch {}
-  }, [marks])
+  }, [marks, showMarks])
+
+  // ── Reference levels (avg price / stop-loss / take-profit) ──────────────────
+  const applyLevels = useCallback(() => {
+    const candle = seriesRef.current?.candle
+    if (!candle) return
+    levelLinesRef.current.forEach(pl => { try { candle.removePriceLine(pl) } catch {} })
+    levelLinesRef.current = []
+
+    const list = Array.isArray(levels) ? levels.filter(l => l && l.price != null) : []
+    for (const lv of list) {
+      const pl = candle.createPriceLine({
+        price: Number(lv.price),
+        color: lv.color || '#40C4FF',
+        lineWidth: 2,
+        lineStyle: lv.dashed ? LineStyle.Dashed : LineStyle.Solid,
+        axisLabelVisible: true,
+        title: lv.title || '',
+      })
+      levelLinesRef.current.push(pl)
+    }
+  }, [levels])
 
   // ── Load data ─────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
@@ -268,17 +294,19 @@ export default function StockChart({ symbol, stockName, interval, marks }) {
       const { main, vol, rsi, kd } = chartsRef.current
       syncPriceScaleWidths([main, vol, rsi, kd])
       applyMarks()
+      applyLevels()
     } catch (e) {
       setError(e.message)
     } finally {
       setLoading(false)
     }
-  }, [symbol, interval, applyMarks])
+  }, [symbol, interval, applyMarks, applyLevels])
 
   useEffect(() => { loadData() }, [loadData])
 
-  // Reapply overlays when marks change (data already loaded)
+  // Reapply overlays when marks/levels change (data already loaded)
   useEffect(() => { applyMarks() }, [applyMarks])
+  useEffect(() => { applyLevels() }, [applyLevels])
 
   // ── Toggle MA visibility ──────────────────────────────────────────────────
   useEffect(() => {
@@ -348,6 +376,15 @@ export default function StockChart({ symbol, stockName, interval, marks }) {
           >
             OBV
           </button>
+          {Array.isArray(marks) && marks.length > 0 && (
+            <button
+              onClick={() => setShowMarks(v => !v)}
+              className={`px-1.5 py-0.5 rounded text-[10px] border border-[#FFD600] text-[#FFD600] transition-opacity ${showMarks ? 'opacity-100' : 'opacity-30'}`}
+              title="顯示/隱藏各筆買入點"
+            >
+              買入點
+            </button>
+          )}
           <button
             onClick={() => loadData()}
             className="px-2 py-0.5 rounded text-[10px] border border-[#2A2A2A] text-gray-400 hover:text-white ml-1"
