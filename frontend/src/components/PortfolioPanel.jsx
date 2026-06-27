@@ -263,11 +263,11 @@ export default function PortfolioPanel({ onJumpToChart }) {
       L.stop_loss_2 != null && { key: 'sl2', on: false, price: L.stop_loss_2, color: LOSS, title: `止損 -1.0R 減40% ${L.stop_loss_2}`, dashed: true },
       L.stop_loss_3 != null && { key: 'sl3', on: false, price: L.stop_loss_3, color: LOSS, title: `止損 -1.5R 清倉 ${L.stop_loss_3}`, dashed: true },
       L.trailing_stop != null && { key: 'trail', on: false, price: L.trailing_stop, color: '#FFA726', title: `移動止損 ${L.trailing_stop}`, dashed: true },
-      L.target_1R != null && { key: 'tp1', on: true,  price: L.target_1R, color: GAIN, title: `目標 +1R 止盈 ${L.target_1R}`, dashed: true },
-      L.target_2R != null && { key: 'tp2', on: false, price: L.target_2R, color: GAIN, title: `目標 +2R 止盈 ${L.target_2R}`, dashed: true },
-      L.target_3R != null && { key: 'tp3', on: false, price: L.target_3R, color: GAIN, title: `目標 +3R 止盈 ${L.target_3R}`, dashed: true },
-      msl != null && { key: 'msl', on: false, price: msl, color: '#80CBC4', title: `手動停損 ${msl}`, dashed: true },
-      mtp != null && { key: 'mtp', on: false, price: mtp, color: '#FF8A80', title: `手動停漲 ${mtp}`, dashed: true },
+      L.target_1R != null && { key: 'tp1', on: true,  price: L.target_1R, color: GAIN, title: `目標 +1R 停利 ${L.target_1R}`, dashed: true },
+      L.target_2R != null && { key: 'tp2', on: false, price: L.target_2R, color: GAIN, title: `目標 +2R 停利 ${L.target_2R}`, dashed: true },
+      L.target_3R != null && { key: 'tp3', on: false, price: L.target_3R, color: GAIN, title: `目標 +3R 停利 ${L.target_3R}`, dashed: true },
+      msl != null && { key: 'msl', on: false, price: msl, color: '#80CBC4', title: `自訂停損 ${msl}`, dashed: true },
+      mtp != null && { key: 'mtp', on: false, price: mtp, color: '#FF8A80', title: `自訂停利 ${mtp}`, dashed: true },
     ].filter(Boolean)
   }
 
@@ -479,13 +479,13 @@ export default function PortfolioPanel({ onJumpToChart }) {
                           </tr>
                         )}
 
-                        {/* Manual stop-loss / take-profit settings row */}
+                        {/* Custom (user-defined) stop-loss / take-profit settings row */}
                         <tr className="bg-[#101216] border-b border-[#222]">
-                          <td className="px-2 pl-3 text-[11px] text-gray-600">手動停損 / 手動停漲</td>
+                          <td className="px-2 pl-3 text-[11px] text-gray-600">自訂停損 / 自訂停利</td>
                           <td colSpan={8} className="px-2 py-1">
                             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px]">
                               <span className="flex items-center gap-1" style={{ color: LOSS }}>
-                                手動停損
+                                自訂停損
                                 <input
                                   type="number" value={h.stopLossPct ?? ''}
                                   onChange={e => patchHolding(hIdx, { stopLossPct: e.target.value })}
@@ -493,10 +493,10 @@ export default function PortfolioPanel({ onJumpToChart }) {
                                   placeholder="%" className="w-14 input text-right"
                                 />
                                 <span className="text-gray-500">% →</span>
-                                <span>手動停損點 {sl == null ? '—' : sl}</span>
+                                <span>自訂停損點 {sl == null ? '—' : sl}</span>
                               </span>
                               <span className="flex items-center gap-1" style={{ color: GAIN }}>
-                                手動停漲
+                                自訂停利
                                 <input
                                   type="number" value={h.takeProfitPct ?? ''}
                                   onChange={e => patchHolding(hIdx, { takeProfitPct: e.target.value })}
@@ -504,7 +504,7 @@ export default function PortfolioPanel({ onJumpToChart }) {
                                   placeholder="%" className="w-14 input text-right"
                                 />
                                 <span className="text-gray-500">% →</span>
-                                <span>手動停漲點 {tp == null ? '—' : tp}</span>
+                                <span>自訂停利點 {tp == null ? '—' : tp}</span>
                               </span>
                             </div>
                           </td>
