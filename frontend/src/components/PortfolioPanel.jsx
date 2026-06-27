@@ -8,6 +8,16 @@ const GAIN = '#EF5350'
 const LOSS = '#26A69A'
 const FLAT = '#FFA726'
 
+const STATE_COLOR = {
+  HEALTHY_TREND: '#40C4FF',
+  OVERHEATED: '#FFA726',
+  CLIMAX_TOP: '#EF5350',
+  WEAKENING: '#AB47BC',
+  NEUTRAL: '#888',
+}
+const ACTION_COLOR = { EXIT_ALL: '#EF5350', SELL_PARTIAL: '#FFA726', ADD: '#40C4FF', HOLD: '#888' }
+const ACTION_LABEL = { EXIT_ALL: '全部出場', SELL_PARTIAL: '分批減倉', ADD: '加倉', HOLD: '續抱' }
+
 const todayStr = () => new Date().toISOString().slice(0, 10)
 const num = (v) => {
   const n = parseFloat(v)
@@ -69,6 +79,8 @@ export default function PortfolioPanel({ onJumpToChart }) {
   const [loading, setLoading] = useState(true)
   const [msg, setMsg] = useState('')
   const [newPerson, setNewPerson] = useState('')
+  const [analysis, setAnalysis] = useState({})    // symbol -> result | 'loading' | {error}
+  const [expanded, setExpanded] = useState({})    // symbol -> bool (strategy panel open)
 
   // New-holding form (amount is derived from price × shares)
   const [form, setForm] = useState({ name: '', symbol: '', price: '', shares: '', date: todayStr() })
@@ -215,21 +227,55 @@ export default function PortfolioPanel({ onJumpToChart }) {
     onJumpToChart?.(h.symbol, h.name,
       lot.price != null ? [{ time: lot.date, price: lot.price, label: lot.date }] : [], [])
 
-  const holdingLevels = (h) => {
+  const earliestDate = (h) => (h.lots.map(l => l.date).filter(Boolean).sort()[0] || '')
+
+  // Load the position-management strategy snapshot (aggregate avg as entry).
+  const loadAnalysis = async (h) => {
     const { avg } = holdingStats(h)
-    const levels = []
-    if (avg != null) levels.push({ price: round2(avg), color: '#40C4FF', title: `均價 ${round2(avg)}`, dashed: false })
-    const sl = stopLossPrice(avg, num(h.stopLossPct))
-    if (sl != null) levels.push({ price: sl, color: LOSS, title: `停損 ${sl}`, dashed: true })
-    const tp = takeProfitPrice(avg, num(h.takeProfitPct))
-    if (tp != null) levels.push({ price: tp, color: GAIN, title: `停漲 ${tp}`, dashed: true })
-    return levels
+    if (avg == null) { setAnalysis(p => ({ ...p, [h.symbol]: { error: '缺少均價' } })); return }
+    setAnalysis(p => ({ ...p, [h.symbol]: 'loading' }))
+    try {
+      const r = await api.getPositionAnalysis(h.symbol, round2(avg), earliestDate(h))
+      setAnalysis(p => ({ ...p, [h.symbol]: r }))
+    } catch (e) {
+      setAnalysis(p => ({ ...p, [h.symbol]: { error: e.message } }))
+    }
   }
 
-  const jumpHolding = (h) =>
-    onJumpToChart?.(h.symbol, h.name,
-      h.lots.filter(l => l.price != null).map(l => ({ time: l.date, price: l.price, label: l.date })),
-      holdingLevels(h))
+  const toggleAnalysis = (h) => {
+    const open = !expanded[h.symbol]
+    setExpanded(p => ({ ...p, [h.symbol]: open }))
+    if (open && analysis[h.symbol] === undefined) loadAnalysis(h)
+  }
+
+  // Build the strategy price lines. Each level carries a stable key + default
+  // visibility (on); titles say how much to sell/add at that price.
+  // Default-visible: 均價 + 第一段止損 + 第一目標 (not all, not none).
+  const strategyLevels = (h, a) => {
+    const { avg } = holdingStats(h)
+    const L = a.levels || {}
+    // Manual stop/take-profit the user set on the holding (merged in here).
+    const msl = stopLossPrice(avg, num(h.stopLossPct))
+    const mtp = takeProfitPrice(avg, num(h.takeProfitPct))
+    return [
+      avg != null && { key: 'avg', on: true, price: round2(avg), color: '#40C4FF', title: `均價 ${round2(avg)}`, dashed: false },
+      L.stop_loss_1 != null && { key: 'sl1', on: true,  price: L.stop_loss_1, color: LOSS, title: `止損 -0.6R 減30% ${L.stop_loss_1}`, dashed: true },
+      L.stop_loss_2 != null && { key: 'sl2', on: false, price: L.stop_loss_2, color: LOSS, title: `止損 -1.0R 減40% ${L.stop_loss_2}`, dashed: true },
+      L.stop_loss_3 != null && { key: 'sl3', on: false, price: L.stop_loss_3, color: LOSS, title: `止損 -1.5R 清倉 ${L.stop_loss_3}`, dashed: true },
+      L.trailing_stop != null && { key: 'trail', on: false, price: L.trailing_stop, color: '#FFA726', title: `移動止損 ${L.trailing_stop}`, dashed: true },
+      L.target_1R != null && { key: 'tp1', on: true,  price: L.target_1R, color: GAIN, title: `目標 +1R 止盈 ${L.target_1R}`, dashed: true },
+      L.target_2R != null && { key: 'tp2', on: false, price: L.target_2R, color: GAIN, title: `目標 +2R 止盈 ${L.target_2R}`, dashed: true },
+      L.target_3R != null && { key: 'tp3', on: false, price: L.target_3R, color: GAIN, title: `目標 +3R 止盈 ${L.target_3R}`, dashed: true },
+      msl != null && { key: 'msl', on: false, price: msl, color: '#80CBC4', title: `手動停損 ${msl}`, dashed: true },
+      mtp != null && { key: 'mtp', on: false, price: mtp, color: '#FF8A80', title: `手動停漲 ${mtp}`, dashed: true },
+    ].filter(Boolean)
+  }
+
+  // The single entry point: open the chart with all strategy lines + buy points.
+  const jumpStrategy = (h, a) => {
+    const marks = h.lots.filter(l => l.price != null).map(l => ({ time: l.date, price: l.price, label: l.date }))
+    onJumpToChart?.(h.symbol, h.name, marks, strategyLevels(h, a))
+  }
 
   const lotPL = (lot, close) => {
     if (lot.price == null || close == null) return { pts: null, money: null }
@@ -399,13 +445,9 @@ export default function PortfolioPanel({ onJumpToChart }) {
                         {/* Holding header row — aggregate stats by 均價 */}
                         <tr className="bg-[#15171A] border-b border-[#1f1f1f]">
                           <td className="py-1.5 px-2">
-                            <button
-                              onClick={() => jumpHolding(h)}
-                              className="text-blue-300 hover:text-blue-200 font-semibold"
-                              title="查看圖表並標出均價、停損/停漲與所有買入點"
-                            >
+                            <span className="text-gray-200 font-semibold">
                               {h.name} <span className="text-gray-500 font-normal">{h.symbol}</span>
-                            </button>
+                            </span>
                           </td>
                           <td className="px-2 text-right font-semibold text-[#40C4FF]" title="加權平均買入點">
                             均 {avg == null ? '—' : round2(avg)}
@@ -416,10 +458,26 @@ export default function PortfolioPanel({ onJumpToChart }) {
                           <td className="px-2 text-right text-gray-300">{close == null ? '—' : close}</td>
                           <td className="px-2 text-right font-semibold" style={{ color: avgColor }}>{fmtPts(avgPts)}</td>
                           <td className="px-2 text-right font-semibold" style={{ color: plColor }}>{fmtMoney(totalPL)}</td>
-                          <td className="px-2 text-right">
+                          <td className="px-2 text-right whitespace-nowrap">
+                            <button
+                              onClick={() => toggleAnalysis(h)}
+                              className={`mr-2 text-[11px] ${expanded[h.symbol] ? 'text-blue-300' : 'text-gray-500 hover:text-blue-300'}`}
+                              title="倉位管理策略分析（依此股彙總均價計算）"
+                            >
+                              {expanded[h.symbol] ? '▾分析' : '▸分析'}
+                            </button>
                             <button onClick={() => removeHolding(hIdx)} className="text-gray-600 hover:text-red-400" title="刪除此股">🗑</button>
                           </td>
                         </tr>
+
+                        {/* Strategy analysis row */}
+                        {expanded[h.symbol] && (
+                          <tr className="bg-[#0B0E12] border-b border-[#222]">
+                            <td colSpan={9} className="px-3 py-2">
+                              <AnalysisBlock a={analysis[h.symbol]} onMark={(res) => jumpStrategy(h, res)} onReload={() => loadAnalysis(h)} />
+                            </td>
+                          </tr>
+                        )}
 
                         {/* Stop-loss / take-profit settings row */}
                         <tr className="bg-[#101216] border-b border-[#222]">
@@ -522,4 +580,58 @@ function Field({ label, children }) {
 // Render multiple <tr> from a map iteration without an extra DOM wrapper.
 function FragmentRows({ children }) {
   return <>{children}</>
+}
+
+// Position-management strategy snapshot (computed from the holding's avg price).
+function AnalysisBlock({ a, onMark, onReload }) {
+  if (a === undefined || a === 'loading') {
+    return <div className="text-xs text-gray-500">分析中...</div>
+  }
+  if (a?.error) {
+    const tip = a.error === 'INSUFFICIENT_DATA' ? '歷史資料不足（需 ≥60 日）' : a.error
+    return (
+      <div className="text-xs text-yellow-400">
+        無法分析：{tip}
+        <button onClick={onReload} className="ml-2 text-blue-300 hover:text-blue-200">重試</button>
+      </div>
+    )
+  }
+  const ind = a.indicators || {}
+  const stat = (label, val) => (
+    <span className="text-gray-400">{label} <span className="text-gray-200">{val}</span></span>
+  )
+  const dec = a.decision || {}
+  const ratioTxt = dec.ratio ? `（${dec.ratio_type === 'add' ? '加倉' : '減倉'} ${Math.round(dec.ratio * 100)}%）` : ''
+  return (
+    <div className="text-[11px] space-y-1.5">
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="px-2 py-0.5 rounded text-white font-semibold" style={{ background: STATE_COLOR[a.state] || '#888' }}>
+          {a.state_label}
+        </span>
+        <span className="px-2 py-0.5 rounded font-semibold" style={{ color: ACTION_COLOR[dec.action] || '#888', border: `1px solid ${ACTION_COLOR[dec.action] || '#888'}` }}>
+          {ACTION_LABEL[dec.action] || dec.action} {ratioTxt}
+        </span>
+        <span className="text-gray-400">{dec.reason}</span>
+        {a.high_volatility && <span className="text-yellow-400">⚠ 高波動，建議降低部位</span>}
+        <button onClick={() => onMark(a)} className="ml-auto px-2 py-0.5 rounded bg-blue-800 text-blue-200 hover:bg-blue-700">在K線圖標出策略價位</button>
+      </div>
+      <div className="flex gap-x-4 gap-y-1 flex-wrap">
+        {stat('均價(進場)', a.entry_price)}
+        {stat('收盤', a.close)}
+        {stat('損益%', (a.pnl_pct >= 0 ? '+' : '') + a.pnl_pct + '%')}
+        {stat('profit_R', a.profit_R)}
+        {stat('ATR%', a.atr_pct + '%')}
+        {stat('基礎止損', a.base_stop_pct + '%')}
+        {stat('RSI', ind.rsi ?? '—')}
+        {stat('量比', ind.volume_ratio ?? '—')}
+        {stat('距MA20', ind.ma20 != null ? (((a.close / ind.ma20 - 1) * 100).toFixed(1) + '%') : '—')}
+        {stat('回撤', ind.drawdown_from_peak_pct != null ? ind.drawdown_from_peak_pct + '%' : '—')}
+      </div>
+      <div className="flex gap-x-4 gap-y-1 flex-wrap">
+        <span style={{ color: LOSS }}>止損 -0.6R/-1.0R/-1.5R: {a.levels.stop_loss_1} / {a.levels.stop_loss_2} / {a.levels.stop_loss_3}</span>
+        {a.levels.trailing_stop != null && <span style={{ color: '#FFA726' }}>移動止損: {a.levels.trailing_stop}</span>}
+        <span style={{ color: GAIN }}>目標 +1R/+2R/+3R: {a.levels.target_1R} / {a.levels.target_2R} / {a.levels.target_3R}</span>
+      </div>
+    </div>
+  )
 }

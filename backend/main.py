@@ -584,6 +584,19 @@ def put_portfolios(body: PortfoliosBody):
     return {"status": "ok"}
 
 
+@app.get("/api/portfolio/position-analysis")
+def get_position_analysis(symbol: str, entry: float, entry_date: str | None = None):
+    """
+    Position-management strategy snapshot for one holding, computed from its
+    aggregate entry (weighted-average buy price) — not per purchase lot.
+    """
+    from position_strategy import analyze_position
+    result = analyze_position(symbol.strip().upper(), entry, entry_date)
+    if result.get("error"):
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
 # ─── Custom stocks ────────────────────────────────────────────────────────────
 
 class StockItem(BaseModel):

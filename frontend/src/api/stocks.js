@@ -152,6 +152,12 @@ export const api = {
     body: JSON.stringify({ persons }),
   }),
 
+  getPositionAnalysis: (symbol, entry, entryDate = '') => {
+    const params = new URLSearchParams({ symbol, entry: String(entry) })
+    if (entryDate) params.set('entry_date', entryDate)
+    return request(`/portfolio/position-analysis?${params.toString()}`)
+  },
+
   pingAuth: async (type) => request('/auth/ping', {
     method: 'POST',
     headers: await (type === 'report' ? reportHeaders() : stockHeaders()),
