@@ -479,13 +479,13 @@ export default function PortfolioPanel({ onJumpToChart }) {
                           </tr>
                         )}
 
-                        {/* Stop-loss / take-profit settings row */}
+                        {/* Manual stop-loss / take-profit settings row */}
                         <tr className="bg-[#101216] border-b border-[#222]">
-                          <td className="px-2 pl-3 text-[11px] text-gray-600">停損 / 停漲</td>
+                          <td className="px-2 pl-3 text-[11px] text-gray-600">手動停損 / 手動停漲</td>
                           <td colSpan={8} className="px-2 py-1">
                             <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px]">
                               <span className="flex items-center gap-1" style={{ color: LOSS }}>
-                                停損
+                                手動停損
                                 <input
                                   type="number" value={h.stopLossPct ?? ''}
                                   onChange={e => patchHolding(hIdx, { stopLossPct: e.target.value })}
@@ -493,10 +493,10 @@ export default function PortfolioPanel({ onJumpToChart }) {
                                   placeholder="%" className="w-14 input text-right"
                                 />
                                 <span className="text-gray-500">% →</span>
-                                <span>停損點 {sl == null ? '—' : sl}</span>
+                                <span>手動停損點 {sl == null ? '—' : sl}</span>
                               </span>
                               <span className="flex items-center gap-1" style={{ color: GAIN }}>
-                                停漲
+                                手動停漲
                                 <input
                                   type="number" value={h.takeProfitPct ?? ''}
                                   onChange={e => patchHolding(hIdx, { takeProfitPct: e.target.value })}
@@ -504,7 +504,7 @@ export default function PortfolioPanel({ onJumpToChart }) {
                                   placeholder="%" className="w-14 input text-right"
                                 />
                                 <span className="text-gray-500">% →</span>
-                                <span>停漲點 {tp == null ? '—' : tp}</span>
+                                <span>手動停漲點 {tp == null ? '—' : tp}</span>
                               </span>
                             </div>
                           </td>
