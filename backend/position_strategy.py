@@ -114,12 +114,43 @@ def _classify_state(ind: dict) -> str:
     return "NEUTRAL"
 
 
-def _is_major_trend_broken(ind: dict) -> bool:
-    ma10, ma20 = ind["ma10"], ind["ma20"]
+def _trend_break_action(profit_R: float, ind: dict) -> dict | None:
+    """
+    Graded handling of a major-trend break (instead of one abrupt EXIT_ALL).
+
+    Severity ladder:
+      - Confirmed breakdown → clear out:
+          跌破 MA20 且 (MA10<MA20 或 自高點回撤≥8%)，或 回撤≥12%
+      - 跌破 MA20 但未確認 → 分批保護利潤（盈利越高減越多）
+      - 未破 MA20、但自高點回撤≥8% → 先減半保護利潤
+      - 否則 → 不觸發（交給狀態處理）
+    Returns a decision dict, or None when no break is detected.
+    """
+    close, ma10, ma20 = ind["close"], ind["ma10"], ind["ma20"]
     dd = ind["drawdown_from_peak"]
     if None in (ma10, ma20):
-        return False
-    return ind["close"] < ma20 or (dd is not None and dd < -0.12) or ma10 < ma20
+        return None
+
+    below_ma20 = close < ma20
+    deep_drawdown = dd is not None and dd <= -0.12
+    confirmed = (below_ma20 and (ma10 < ma20 or (dd is not None and dd <= -0.08))) or deep_drawdown
+
+    if confirmed:
+        return {"action": "EXIT_ALL",
+                "reason": "大趨勢破壞：跌破 MA20 且確認轉弱（MA10<MA20 或 回撤≥8%）或回撤≥12%",
+                "ratio": 1.0, "ratio_type": "sell"}
+
+    if below_ma20:
+        if profit_R >= 3:
+            return {"action": "SELL_PARTIAL", "reason": "跌破 MA20（尚未確認）：高利潤倉位先減半保護利潤", "ratio": 0.50, "ratio_type": "sell"}
+        if profit_R >= 1:
+            return {"action": "SELL_PARTIAL", "reason": "跌破 MA20（尚未確認）：獲利倉位先減倉觀察", "ratio": 0.40, "ratio_type": "sell"}
+        return {"action": "SELL_PARTIAL", "reason": "跌破 MA20（尚未確認）：先減倉控制風險", "ratio": 0.30, "ratio_type": "sell"}
+
+    if dd is not None and dd <= -0.08:
+        return {"action": "SELL_PARTIAL", "reason": "自高點回撤逾 8%，先減半保護利潤", "ratio": 0.50, "ratio_type": "sell"}
+
+    return None
 
 
 def _decide(state: str, profit_R: float, pnl_pct: float, base_stop: float, ind: dict) -> dict:
@@ -132,9 +163,10 @@ def _decide(state: str, profit_R: float, pnl_pct: float, base_stop: float, ind: 
     if pnl_pct <= -0.6 * base_stop:
         return {"action": "SELL_PARTIAL", "reason": "觸及第一層止損（-0.6R）", "ratio": 0.30, "ratio_type": "sell"}
 
-    # Priority 2 — major trend broken
-    if _is_major_trend_broken(ind):
-        return {"action": "EXIT_ALL", "reason": "大趨勢破壞（跌破 MA20 / 回撤過大 / MA10<MA20）", "ratio": 1.0, "ratio_type": "sell"}
+    # Priority 2 — major trend break (graded, not a blanket exit)
+    tb = _trend_break_action(profit_R, ind)
+    if tb:
+        return tb
 
     # Priority 3 — state handlers
     if state == "CLIMAX_TOP":
