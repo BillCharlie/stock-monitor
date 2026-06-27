@@ -25,6 +25,8 @@ const num = (v) => {
 }
 const fmtMoney = (n) =>
   n == null ? '—' : n.toLocaleString('en-US', { maximumFractionDigits: 0 })
+const fmtMoneySigned = (n) =>
+  n == null ? '—' : (n >= 0 ? '+' : '') + n.toLocaleString('en-US', { maximumFractionDigits: 0 })
 const fmtPts = (n) => (n == null ? '—' : (n >= 0 ? '+' : '') + n.toFixed(2))
 // Invested amount is derived: 買入點 × 股數
 const calcAmount = (price, shares) =>
@@ -42,17 +44,19 @@ const holdingStats = (h) => {
     if (sh != null) buyShares += sh
     if (am != null) buyAmount += am
   }
-  let sellShares = 0, sellAmount = 0
+  const avg = buyShares > 0 ? buyAmount / buyShares : null
+  let sellShares = 0, sellAmount = 0, realized = 0
   for (const s of h.sells || []) {
     const sh = s.shares
     const am = s.amount != null ? s.amount : calcAmount(s.price, s.shares)
     if (sh != null) sellShares += sh
     if (am != null) sellAmount += am
+    if (sh != null && s.price != null && avg != null) realized += (s.price - avg) * sh
   }
-  const avg = buyShares > 0 ? buyAmount / buyShares : null
+  const hasSells = (h.sells || []).length > 0
   const netShares = buyShares - sellShares
   const netCost = avg != null ? avg * Math.max(netShares, 0) : null
-  return { avg, buyShares, buyAmount, sellShares, sellAmount, netShares, netCost }
+  return { avg, buyShares, buyAmount, sellShares, sellAmount, realized, hasSells, netShares, netCost }
 }
 const round2 = (n) => (n == null ? null : Math.round(n * 100) / 100)
 // Stop-loss / take-profit price from average and a percentage.
@@ -461,10 +465,11 @@ export default function PortfolioPanel({ onJumpToChart }) {
                 <tbody>
                   {activeHoldings.map((h, hIdx) => {
                     const close = quotes[h.symbol]
-                    const { avg, netShares, netCost, sellShares } = holdingStats(h)
+                    const { avg, netShares, netCost, realized, hasSells } = holdingStats(h)
                     // Unrealized P/L on the remaining (net) position, by average cost.
-                    const totalPL = (avg != null && close != null) ? (close - avg) * Math.max(netShares, 0) : null
-                    const plColor = totalPL > 0 ? GAIN : totalPL < 0 ? LOSS : FLAT
+                    const unrealPL = (avg != null && close != null) ? (close - avg) * Math.max(netShares, 0) : null
+                    const realColor = realized > 0 ? GAIN : realized < 0 ? LOSS : FLAT
+                    const unrealColor = unrealPL == null ? '#888' : unrealPL > 0 ? GAIN : unrealPL < 0 ? LOSS : FLAT
                     const avgPts = (avg != null && close != null) ? close - avg : null
                     const avgColor = avgPts == null ? '#888' : avgPts > 0 ? GAIN : avgPts < 0 ? LOSS : FLAT
                     const sl = stopLossPrice(avg, num(h.stopLossPct))
@@ -488,7 +493,16 @@ export default function PortfolioPanel({ onJumpToChart }) {
                           <td className="px-2 text-gray-500">買{h.lots.length} 賣{(h.sells || []).length}</td>
                           <td className="px-2 text-right text-gray-300">{close == null ? '—' : close}</td>
                           <td className="px-2 text-right font-semibold" style={{ color: avgColor }}>{fmtPts(avgPts)}</td>
-                          <td className="px-2 text-right font-semibold" style={{ color: plColor }}>{fmtMoney(totalPL)}</td>
+                          <td className="px-2 text-right font-semibold">
+                            {hasSells ? (
+                              <div className="flex flex-col leading-tight">
+                                <span style={{ color: realColor }} title="已實現（出倉）盈虧">已實 {fmtMoneySigned(realized)}</span>
+                                <span style={{ color: unrealColor }} title="未實現（剩餘持倉）盈虧">浮動 {unrealPL == null ? '—' : fmtMoneySigned(unrealPL)}</span>
+                              </div>
+                            ) : (
+                              <span style={{ color: unrealColor }}>{unrealPL == null ? '—' : fmtMoneySigned(unrealPL)}</span>
+                            )}
+                          </td>
                           <td className="px-2 text-right whitespace-nowrap">
                             <button
                               onClick={() => toggleAnalysis(h)}
