@@ -30,17 +30,29 @@ const fmtPts = (n) => (n == null ? '—' : (n >= 0 ? '+' : '') + n.toFixed(2))
 const calcAmount = (price, shares) =>
   price != null && shares != null ? price * shares : null
 
-// Aggregate a holding's lots: total shares/amount and weighted average buy price.
+// Aggregate a holding's buys & sells.
+// - avg     : weighted-average BUY price (cost basis / strategy entry)
+// - netShares: buy shares − sell shares (current position)
+// - netCost : remaining invested capital at cost = avg × netShares
 const holdingStats = (h) => {
-  let totalShares = 0, totalAmount = 0
+  let buyShares = 0, buyAmount = 0
   for (const l of h.lots || []) {
-    const shares = l.shares
-    const amount = l.amount != null ? l.amount : calcAmount(l.price, l.shares)
-    if (shares != null) totalShares += shares
-    if (amount != null) totalAmount += amount
+    const sh = l.shares
+    const am = l.amount != null ? l.amount : calcAmount(l.price, l.shares)
+    if (sh != null) buyShares += sh
+    if (am != null) buyAmount += am
   }
-  const avg = totalShares > 0 ? totalAmount / totalShares : null
-  return { totalShares, totalAmount, avg }
+  let sellShares = 0, sellAmount = 0
+  for (const s of h.sells || []) {
+    const sh = s.shares
+    const am = s.amount != null ? s.amount : calcAmount(s.price, s.shares)
+    if (sh != null) sellShares += sh
+    if (am != null) sellAmount += am
+  }
+  const avg = buyShares > 0 ? buyAmount / buyShares : null
+  const netShares = buyShares - sellShares
+  const netCost = avg != null ? avg * Math.max(netShares, 0) : null
+  return { avg, buyShares, buyAmount, sellShares, sellAmount, netShares, netCost }
 }
 const round2 = (n) => (n == null ? null : Math.round(n * 100) / 100)
 // Stop-loss / take-profit price from average and a percentage.
@@ -84,8 +96,9 @@ export default function PortfolioPanel({ onJumpToChart }) {
 
   // New-holding form (amount is derived from price × shares)
   const [form, setForm] = useState({ name: '', symbol: '', price: '', shares: '', date: todayStr() })
-  // Add-lot form keyed by holding index
+  // Add-lot (buy) and add-sell forms keyed by holding index
   const [lotForms, setLotForms] = useState({})
+  const [sellForms, setSellForms] = useState({})
 
   // ── Initial load ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -205,6 +218,25 @@ export default function PortfolioPanel({ onJumpToChart }) {
     const holdings = persons[activePerson]
       .map((h, i) => i === hIdx ? { ...h, lots: h.lots.filter((_, j) => j !== lIdx) } : h)
       .filter(h => h.lots.length > 0)
+    persist({ ...persons, [activePerson]: holdings })
+  }
+
+  const addSell = (hIdx) => {
+    const sf = sellForms[hIdx] || {}
+    const price = num(sf.price), shares = num(sf.shares)
+    if (price == null || shares == null) { setMsg('⚠ 出倉需填賣出點與股數'); return }
+    const sell = { price, shares, amount: calcAmount(price, shares), date: sf.date || todayStr() }
+    const holdings = persons[activePerson].map((h, i) =>
+      i === hIdx ? { ...h, sells: [...(h.sells || []), sell] } : h
+    )
+    persist({ ...persons, [activePerson]: holdings })
+    setSellForms(prev => ({ ...prev, [hIdx]: { date: todayStr() } }))
+  }
+
+  const removeSell = (hIdx, sIdx) => {
+    const holdings = persons[activePerson].map((h, i) =>
+      i === hIdx ? { ...h, sells: (h.sells || []).filter((_, j) => j !== sIdx) } : h
+    )
     persist({ ...persons, [activePerson]: holdings })
   }
 
@@ -429,17 +461,16 @@ export default function PortfolioPanel({ onJumpToChart }) {
                 <tbody>
                   {activeHoldings.map((h, hIdx) => {
                     const close = quotes[h.symbol]
-                    const totalPL = h.lots.reduce((acc, l) => {
-                      const { money } = lotPL(l, close)
-                      return money == null ? acc : acc + money
-                    }, 0)
+                    const { avg, netShares, netCost, sellShares } = holdingStats(h)
+                    // Unrealized P/L on the remaining (net) position, by average cost.
+                    const totalPL = (avg != null && close != null) ? (close - avg) * Math.max(netShares, 0) : null
                     const plColor = totalPL > 0 ? GAIN : totalPL < 0 ? LOSS : FLAT
-                    const { totalShares, totalAmount, avg } = holdingStats(h)
                     const avgPts = (avg != null && close != null) ? close - avg : null
                     const avgColor = avgPts == null ? '#888' : avgPts > 0 ? GAIN : avgPts < 0 ? LOSS : FLAT
                     const sl = stopLossPrice(avg, num(h.stopLossPct))
                     const tp = takeProfitPrice(avg, num(h.takeProfitPct))
                     const lf = lotForms[hIdx] || { date: todayStr() }
+                    const sfm = sellForms[hIdx] || { date: todayStr() }
                     return (
                       <FragmentRows key={h.symbol + hIdx}>
                         {/* Holding header row — aggregate stats by 均價 */}
@@ -452,9 +483,9 @@ export default function PortfolioPanel({ onJumpToChart }) {
                           <td className="px-2 text-right font-semibold text-[#40C4FF]" title="加權平均買入點">
                             均 {avg == null ? '—' : round2(avg)}
                           </td>
-                          <td className="px-2 text-right text-gray-300">{fmtMoney(totalAmount)}</td>
-                          <td className="px-2 text-right text-gray-300">{totalShares || '—'}</td>
-                          <td className="px-2 text-gray-500">共 {h.lots.length} 筆</td>
+                          <td className="px-2 text-right text-gray-300" title="淨投資成本 = 均價 × 淨持股">{fmtMoney(netCost)}</td>
+                          <td className="px-2 text-right text-gray-300" title="淨持股 = 買入 − 賣出">{netShares || '—'}</td>
+                          <td className="px-2 text-gray-500">買{h.lots.length} 賣{(h.sells || []).length}</td>
                           <td className="px-2 text-right text-gray-300">{close == null ? '—' : close}</td>
                           <td className="px-2 text-right font-semibold" style={{ color: avgColor }}>{fmtPts(avgPts)}</td>
                           <td className="px-2 text-right font-semibold" style={{ color: plColor }}>{fmtMoney(totalPL)}</td>
@@ -548,6 +579,39 @@ export default function PortfolioPanel({ onJumpToChart }) {
                           <td className="px-2"><input value={lf.date || todayStr()} onChange={e => setLotForms(p => ({ ...p, [hIdx]: { ...lf, date: e.target.value } }))} type="date" className="w-32 input" /></td>
                           <td colSpan={3}></td>
                           <td className="px-2 text-right"><button onClick={() => addLot(hIdx)} className="px-2 py-0.5 rounded text-[11px] bg-blue-800 text-blue-200 hover:bg-blue-700">加入</button></td>
+                        </tr>
+
+                        {/* Sell records — realized P/L = (賣出點 − 均價) × 股數 */}
+                        {(h.sells || []).map((sell, sIdx) => {
+                          const rPts = (sell.price != null && avg != null) ? sell.price - avg : null
+                          const rMoney = (rPts != null && sell.shares != null) ? rPts * sell.shares : null
+                          const rc = rPts == null ? '#888' : rPts > 0 ? GAIN : rPts < 0 ? LOSS : FLAT
+                          return (
+                            <tr key={'s' + sIdx} className="border-b border-[#1A1A1A] bg-[#120e0e]">
+                              <td className="py-1 px-2 pl-5 text-[#FF8A80]">↑ 出倉</td>
+                              <td className="px-2 text-right">{sell.price ?? '—'}</td>
+                              <td className="px-2 text-right">{fmtMoney(sell.amount)}</td>
+                              <td className="px-2 text-right">−{sell.shares ?? '—'}</td>
+                              <td className="px-2 text-gray-500">{sell.date || '—'}</td>
+                              <td className="px-2 text-right text-gray-600">已實現</td>
+                              <td className="px-2 text-right" style={{ color: rc }}>{fmtPts(rPts)}</td>
+                              <td className="px-2 text-right" style={{ color: rc }}>{fmtMoney(rMoney)}</td>
+                              <td className="px-2 text-right">
+                                <button onClick={() => removeSell(hIdx, sIdx)} className="text-gray-700 hover:text-red-400" title="刪除此出倉">×</button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+
+                        {/* Add-sell row */}
+                        <tr className="border-b border-[#222] bg-[#0F0B0B]">
+                          <td className="py-1 px-2 pl-5 text-[#FF8A80]">+ 新增出倉</td>
+                          <td className="px-2"><input value={sfm.price || ''} onChange={e => setSellForms(p => ({ ...p, [hIdx]: { ...sfm, price: e.target.value } }))} type="number" placeholder="賣出點" className="w-16 input" /></td>
+                          <td className="px-2 text-right text-gray-500">{fmtMoney(calcAmount(num(sfm.price), num(sfm.shares)))}</td>
+                          <td className="px-2"><input value={sfm.shares || ''} onChange={e => setSellForms(p => ({ ...p, [hIdx]: { ...sfm, shares: e.target.value } }))} type="number" placeholder="股" className="w-16 input" /></td>
+                          <td className="px-2"><input value={sfm.date || todayStr()} onChange={e => setSellForms(p => ({ ...p, [hIdx]: { ...sfm, date: e.target.value } }))} type="date" className="w-32 input" /></td>
+                          <td colSpan={3}></td>
+                          <td className="px-2 text-right"><button onClick={() => addSell(hIdx)} className="px-2 py-0.5 rounded text-[11px] bg-[#8a3b3b] text-red-100 hover:bg-[#a04848]">出倉</button></td>
                         </tr>
                       </FragmentRows>
                     )
