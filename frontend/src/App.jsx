@@ -316,7 +316,14 @@ export default function App() {
               <PortfolioPanel
                 onNeedKey={() => openKeyPanel('stock')}
                 onJumpToChart={(symbol, name, marks, levels) => {
-                  setSelected({ symbol, name, marks, levels })
+                  setSelected(s => {
+                    // Same stock: merge with any existing 明日買賣策略價位 so both
+                    // groups coexist. Different stock: fresh set.
+                    if (s.symbol !== symbol) return { symbol, name, marks, levels }
+                    const incoming = new Set(levels.map(l => l.key || l.title))
+                    const kept = (s.levels || []).filter(l => !incoming.has(l.key || l.title))
+                    return { symbol, name, marks, levels: [...kept, ...levels] }
+                  })
                   setActiveTab('chart')
                 }}
               />
