@@ -46,14 +46,18 @@ export default function App() {
     localStorage.setItem('sm_font_scale', fontScale)
   }, [fontScale])
 
-  // Initialize strategy-level visibility whenever a new level set is drawn.
+  // Sync level visibility with the current level set: keep existing toggles,
+  // add defaults for new keys, drop keys no longer present.
   useEffect(() => {
-    const init = {}
-    for (const lv of selected.levels || []) {
-      const k = lv.key || lv.title
-      if (k) init[k] = lv.on !== false
-    }
-    setLevelVis(init)
+    setLevelVis(prev => {
+      const next = {}
+      for (const lv of selected.levels || []) {
+        const k = lv.key || lv.title
+        if (!k) continue
+        next[k] = (k in prev) ? prev[k] : (lv.on !== false)
+      }
+      return next
+    })
   }, [selected.levels])
   const toggleLevel = (k) => setLevelVis(v => ({ ...v, [k]: !v[k] }))
 
@@ -280,7 +284,13 @@ export default function App() {
                   levels={selected.levels}
                   levelVis={levelVis}
                   onToggleLevel={toggleLevel}
-                  onMark={(marks, levels) => setSelected(s => ({ ...s, marks, levels }))}
+                  onMark={(marks, levels) => setSelected(s => {
+                    // Merge by key: timing levels add to (not replace) any
+                    // existing 倉位管理價位; keep current buy-point marks.
+                    const incoming = new Set(levels.map(l => l.key || l.title))
+                    const kept = (s.levels || []).filter(l => !incoming.has(l.key || l.title))
+                    return { ...s, levels: [...kept, ...levels] }
+                  })}
                 />
                 <div className="flex-1 min-h-0">
                   <StockChart symbol={selected.symbol} stockName={selected.name} interval={interval} marks={selected.marks} levels={selected.levels} levelVis={levelVis} />

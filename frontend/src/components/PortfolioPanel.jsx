@@ -287,10 +287,10 @@ export default function PortfolioPanel({ onJumpToChart }) {
   // Build the strategy price lines. Each level carries a stable key + default
   // visibility (on); titles say how much to sell/add at that price.
   // Default-visible: 均價 + 第一段止損 + 第一目標 (not all, not none).
+  // 倉位管理價位（均價/止損/目標/自訂），group:'position'。
   const strategyLevels = (h, a) => {
     const { avg } = holdingStats(h)
     const L = a.levels || {}
-    // Manual stop/take-profit the user set on the holding (merged in here).
     const msl = stopLossPrice(avg, num(h.stopLossPct))
     const mtp = takeProfitPrice(avg, num(h.takeProfitPct))
     return [
@@ -304,21 +304,7 @@ export default function PortfolioPanel({ onJumpToChart }) {
       L.target_3R != null && { key: 'tp3', on: false, price: L.target_3R, color: GAIN, title: `目標 +3R 停利 ${L.target_3R}`, dashed: true },
       msl != null && { key: 'msl', on: false, price: msl, color: '#80CBC4', title: `自訂停損 ${msl}`, dashed: true },
       mtp != null && { key: 'mtp', on: false, price: mtp, color: '#FF8A80', title: `自訂停利 ${mtp}`, dashed: true },
-      ...dailyLevels(a),
-    ].filter(Boolean)
-  }
-
-  // 明日(T+1)時機關鍵價位（今高/今低/MA5/MA10/前高/平台支撐），預設關閉，需要時勾選。
-  const dailyLevels = (a) => {
-    const D = (a && a.daily && a.daily.levels) || {}
-    return [
-      D.today_high != null && { key: 'dth', on: false, price: D.today_high, color: '#B0BEC5', title: `今日高 ${D.today_high}`, dashed: true },
-      D.today_low != null && { key: 'dtl', on: false, price: D.today_low, color: '#B0BEC5', title: `今日低 ${D.today_low}`, dashed: true },
-      D.ma5 != null && { key: 'dma5', on: false, price: D.ma5, color: '#FF6D00', title: `MA5 ${D.ma5}`, dashed: true },
-      D.ma10 != null && { key: 'dma10', on: false, price: D.ma10, color: '#FFD600', title: `MA10 ${D.ma10}`, dashed: true },
-      D.prev_high != null && { key: 'dph', on: false, price: D.prev_high, color: '#EF5350', title: `前高 ${D.prev_high}`, dashed: true },
-      D.platform_support != null && { key: 'dps', on: false, price: D.platform_support, color: '#26A69A', title: `平台支撐 ${D.platform_support}`, dashed: true },
-    ].filter(Boolean)
+    ].filter(Boolean).map(l => ({ ...l, group: 'position' }))
   }
 
   // The single entry point: open the chart with all strategy lines + buy points.

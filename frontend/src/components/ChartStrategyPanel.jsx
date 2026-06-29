@@ -6,7 +6,7 @@ const GAIN = '#EF5350'
 const LOSS = '#26A69A'
 const FLAT = '#FFA726'
 
-// Chart view shows next-day TIMING only — mark the trigger price levels.
+// 明日買賣策略價位（時機觸發價），group:'timing'。
 function buildLevels(a) {
   const D = (a.daily && a.daily.levels) || {}
   return [
@@ -16,7 +16,32 @@ function buildLevels(a) {
     D.ma10 != null && { key: 'dma10', on: false, price: D.ma10, color: '#FFD600', title: `MA10 ${D.ma10}`, dashed: true },
     D.prev_high != null && { key: 'dph', on: false, price: D.prev_high, color: '#EF5350', title: `前高 ${D.prev_high}`, dashed: true },
     D.platform_support != null && { key: 'dps', on: false, price: D.platform_support, color: '#26A69A', title: `平台支撐 ${D.platform_support}`, dashed: true },
-  ].filter(Boolean)
+  ].filter(Boolean).map(l => ({ ...l, group: 'timing' }))
+}
+
+// A labeled row of toggleable level chips for one group.
+function LevelLegend({ label, items, levelVis, onToggleLevel }) {
+  if (!items.length) return null
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      <span className="text-[10px] text-gray-500 mr-1">{label}</span>
+      {items.map(lv => {
+        const key = lv.key || lv.title
+        const on = levelVis[key] !== false
+        return (
+          <button
+            key={key}
+            onClick={() => onToggleLevel?.(key)}
+            className={`px-1.5 py-0.5 rounded text-[10px] border transition-opacity ${on ? 'opacity-100' : 'opacity-30'}`}
+            style={{ borderColor: lv.color, color: lv.color }}
+            title={on ? '點擊隱藏' : '點擊顯示'}
+          >
+            {lv.title}
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 // Strategy + next-day timing analysis for the currently charted symbol.
@@ -50,25 +75,11 @@ export default function ChartStrategyPanel({ symbol, name, levels, levelVis = {}
 
       {open && (
         <div className="px-3 pb-2 text-[11px]">
-          {/* Strategy price-line legend — toggle each line on/off */}
+          {/* Price-line legends — two groups, each line toggleable */}
           {Array.isArray(levels) && levels.length > 0 && (
-            <div className="flex items-center gap-1.5 flex-wrap mb-1.5 pb-1.5 border-b border-[#1f1f1f]">
-              <span className="text-[10px] text-gray-600 mr-1">策略價位</span>
-              {levels.filter(l => l && l.price != null).map(lv => {
-                const key = lv.key || lv.title
-                const on = levelVis[key] !== false
-                return (
-                  <button
-                    key={key}
-                    onClick={() => onToggleLevel?.(key)}
-                    className={`px-1.5 py-0.5 rounded text-[10px] border transition-opacity ${on ? 'opacity-100' : 'opacity-30'}`}
-                    style={{ borderColor: lv.color, color: lv.color }}
-                    title={on ? '點擊隱藏' : '點擊顯示'}
-                  >
-                    {lv.title}
-                  </button>
-                )
-              })}
+            <div className="flex flex-col gap-1 mb-1.5 pb-1.5 border-b border-[#1f1f1f]">
+              <LevelLegend label="倉位管理價位" items={levels.filter(l => l && l.price != null && l.group !== 'timing')} levelVis={levelVis} onToggleLevel={onToggleLevel} />
+              <LevelLegend label="明日買賣策略價位" items={levels.filter(l => l && l.price != null && l.group === 'timing')} levelVis={levelVis} onToggleLevel={onToggleLevel} />
             </div>
           )}
           {a === 'loading' && <div className="text-gray-500">分析中...</div>}
