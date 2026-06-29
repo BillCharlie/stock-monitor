@@ -23,6 +23,7 @@ const stockKeyTabs = new Set(['analysis', 'activeEtf', 'portfolio'])
 
 export default function App() {
   const [selected, setSelected] = useState({ symbol: '2330.TW', name: '台積電' })
+  const [levelVis, setLevelVis] = useState({})   // strategy level key -> visible
   const [interval, setInterval] = useState('1d')
   const [activeTab, setActiveTab] = useState('chart')
   const [generating, setGenerating] = useState(false)
@@ -44,6 +45,17 @@ export default function App() {
     document.documentElement.style.setProperty('--font-scale', fontScale)
     localStorage.setItem('sm_font_scale', fontScale)
   }, [fontScale])
+
+  // Initialize strategy-level visibility whenever a new level set is drawn.
+  useEffect(() => {
+    const init = {}
+    for (const lv of selected.levels || []) {
+      const k = lv.key || lv.title
+      if (k) init[k] = lv.on !== false
+    }
+    setLevelVis(init)
+  }, [selected.levels])
+  const toggleLevel = (k) => setLevelVis(v => ({ ...v, [k]: !v[k] }))
 
   useEffect(() => {
     const onMove = (e) => {
@@ -265,10 +277,13 @@ export default function App() {
                 <ChartStrategyPanel
                   symbol={selected.symbol}
                   name={selected.name}
+                  levels={selected.levels}
+                  levelVis={levelVis}
+                  onToggleLevel={toggleLevel}
                   onMark={(marks, levels) => setSelected(s => ({ ...s, marks, levels }))}
                 />
                 <div className="flex-1 min-h-0">
-                  <StockChart symbol={selected.symbol} stockName={selected.name} interval={interval} marks={selected.marks} levels={selected.levels} />
+                  <StockChart symbol={selected.symbol} stockName={selected.name} interval={interval} marks={selected.marks} levels={selected.levels} levelVis={levelVis} />
                 </div>
               </div>
             )}

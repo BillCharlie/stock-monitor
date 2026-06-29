@@ -64,7 +64,7 @@ function syncPriceScaleWidths(charts) {
   setTimeout(doSync, 500)
 }
 
-export default function StockChart({ symbol, stockName, interval, marks, levels }) {
+export default function StockChart({ symbol, stockName, interval, marks, levels, levelVis = {} }) {
   const mainRef    = useRef(null)
   const volRef     = useRef(null)
   const rsiRef     = useRef(null)
@@ -82,25 +82,13 @@ export default function StockChart({ symbol, stockName, interval, marks, levels 
   const [showBB, setShowBB] = useState(true)
   const [showOBV, setShowOBV] = useState(true)
   const [showMarks, setShowMarks] = useState(true)
-  const [levelVis, setLevelVis] = useState({})   // level key -> visible
   const [ohlcInfo, setOhlcInfo] = useState(null)
   const [lastUpdated, setLastUpdated] = useState('')
 
   // Default to showing buy points each time a new set of marks arrives.
   useEffect(() => { setShowMarks(true) }, [marks])
-
-  // Initialize per-level visibility when a new set of levels arrives.
-  // Each level may declare `on: false` to start hidden (not all, not none).
-  useEffect(() => {
-    const init = {}
-    for (const lv of Array.isArray(levels) ? levels : []) {
-      const key = lv.key || lv.title
-      if (key) init[key] = lv.on !== false
-    }
-    setLevelVis(init)
-  }, [levels])
-
-  const toggleLevel = (key) => setLevelVis(v => ({ ...v, [key]: !v[key] }))
+  // Per-level visibility (`levelVis`) is owned by the parent so the toggle
+  // chips can live in the strategy panel.
 
   // ── Initialize charts (once) ──────────────────────────────────────────────
   useEffect(() => {
@@ -410,28 +398,6 @@ export default function StockChart({ symbol, stockName, interval, marks, levels 
           </button>
         </div>
       </div>
-
-      {/* Strategy level legend — freely toggle each price line on/off */}
-      {Array.isArray(levels) && levels.length > 0 && (
-        <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-[#2A2A2A] bg-[#0A0A0A] flex-shrink-0 flex-wrap">
-          <span className="text-[10px] text-gray-600 mr-1">策略價位</span>
-          {levels.filter(l => l && l.price != null).map(lv => {
-            const key = lv.key || lv.title
-            const on = levelVis[key] !== false
-            return (
-              <button
-                key={key}
-                onClick={() => toggleLevel(key)}
-                className={`px-1.5 py-0.5 rounded text-[10px] border transition-opacity ${on ? 'opacity-100' : 'opacity-30'}`}
-                style={{ borderColor: lv.color, color: lv.color }}
-                title={on ? '點擊隱藏' : '點擊顯示'}
-              >
-                {lv.title}
-              </button>
-            )
-          })}
-        </div>
-      )}
 
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">

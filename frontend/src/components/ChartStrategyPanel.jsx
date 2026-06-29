@@ -21,7 +21,7 @@ function buildLevels(a) {
 
 // Strategy + next-day timing analysis for the currently charted symbol.
 // Entry-free: uses latest close as an assumed entry, so it works for any stock.
-export default function ChartStrategyPanel({ symbol, name, onMark }) {
+export default function ChartStrategyPanel({ symbol, name, levels, levelVis = {}, onToggleLevel, onMark }) {
   const [open, setOpen] = useState(false)
   const [a, setA] = useState(null)   // result | 'loading' | {error}
 
@@ -50,6 +50,27 @@ export default function ChartStrategyPanel({ symbol, name, onMark }) {
 
       {open && (
         <div className="px-3 pb-2 text-[11px]">
+          {/* Strategy price-line legend — toggle each line on/off */}
+          {Array.isArray(levels) && levels.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-wrap mb-1.5 pb-1.5 border-b border-[#1f1f1f]">
+              <span className="text-[10px] text-gray-600 mr-1">策略價位</span>
+              {levels.filter(l => l && l.price != null).map(lv => {
+                const key = lv.key || lv.title
+                const on = levelVis[key] !== false
+                return (
+                  <button
+                    key={key}
+                    onClick={() => onToggleLevel?.(key)}
+                    className={`px-1.5 py-0.5 rounded text-[10px] border transition-opacity ${on ? 'opacity-100' : 'opacity-30'}`}
+                    style={{ borderColor: lv.color, color: lv.color }}
+                    title={on ? '點擊隱藏' : '點擊顯示'}
+                  >
+                    {lv.title}
+                  </button>
+                )
+              })}
+            </div>
+          )}
           {a === 'loading' && <div className="text-gray-500">分析中...</div>}
           {a && a.error && (
             <div className="text-yellow-400">
