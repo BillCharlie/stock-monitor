@@ -69,8 +69,14 @@ export default function ChartStrategyPanel({ symbol, name, onMark }) {
                 <button onClick={() => onMark?.([], buildLevels(a))} className="ml-auto px-2 py-0.5 rounded bg-blue-800 text-blue-200 hover:bg-blue-700">標出時機價位</button>
               </div>
               <div className="flex flex-col gap-0.5">
-                <span style={{ color: GAIN }}>明日偏多觸發：{(daily.long_triggers || []).join('；')}</span>
-                <span style={{ color: LOSS }}>明日偏空觸發：{(daily.short_triggers || []).join('；')}</span>
+                <span style={{ color: GAIN }} className="font-semibold">明日偏多觸發</span>
+                {(daily.long_triggers || []).map((t, i) => (
+                  <span key={i} style={{ color: GAIN }} className="pl-2">（情況{i + 1}）{t}</span>
+                ))}
+                <span style={{ color: LOSS }} className="font-semibold mt-0.5">明日偏空觸發</span>
+                {(daily.short_triggers || []).map((t, i) => (
+                  <span key={i} style={{ color: LOSS }} className="pl-2">（情況{i + 1}）{t}</span>
+                ))}
               </div>
               <div className="text-gray-300">建議買法：{daily.buy_method}</div>
             </div>
