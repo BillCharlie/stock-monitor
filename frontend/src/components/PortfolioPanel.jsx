@@ -304,6 +304,20 @@ export default function PortfolioPanel({ onJumpToChart }) {
       L.target_3R != null && { key: 'tp3', on: false, price: L.target_3R, color: GAIN, title: `目標 +3R 停利 ${L.target_3R}`, dashed: true },
       msl != null && { key: 'msl', on: false, price: msl, color: '#80CBC4', title: `自訂停損 ${msl}`, dashed: true },
       mtp != null && { key: 'mtp', on: false, price: mtp, color: '#FF8A80', title: `自訂停利 ${mtp}`, dashed: true },
+      ...dailyLevels(a),
+    ].filter(Boolean)
+  }
+
+  // 隔日時機關鍵價位（今高/今低/MA5/MA10/前高/平台支撐），預設關閉，需要時勾選。
+  const dailyLevels = (a) => {
+    const D = (a && a.daily && a.daily.levels) || {}
+    return [
+      D.today_high != null && { key: 'dth', on: false, price: D.today_high, color: '#B0BEC5', title: `今日高 ${D.today_high}`, dashed: true },
+      D.today_low != null && { key: 'dtl', on: false, price: D.today_low, color: '#B0BEC5', title: `今日低 ${D.today_low}`, dashed: true },
+      D.ma5 != null && { key: 'dma5', on: false, price: D.ma5, color: '#FF6D00', title: `MA5 ${D.ma5}`, dashed: true },
+      D.ma10 != null && { key: 'dma10', on: false, price: D.ma10, color: '#FFD600', title: `MA10 ${D.ma10}`, dashed: true },
+      D.prev_high != null && { key: 'dph', on: false, price: D.prev_high, color: '#EF5350', title: `前高 ${D.prev_high}`, dashed: true },
+      D.platform_support != null && { key: 'dps', on: false, price: D.platform_support, color: '#26A69A', title: `平台支撐 ${D.platform_support}`, dashed: true },
     ].filter(Boolean)
   }
 
@@ -710,6 +724,30 @@ function AnalysisBlock({ a, onMark, onReload }) {
         {a.levels.trailing_stop != null && <span style={{ color: '#FFA726' }}>移動止損: {a.levels.trailing_stop}</span>}
         <span style={{ color: GAIN }}>目標 +1R/+2R/+3R: {a.levels.target_1R} / {a.levels.target_2R} / {a.levels.target_3R}</span>
       </div>
+
+      {a.daily && <DailyBlock d={a.daily} />}
+    </div>
+  )
+}
+
+// 隔日（短線）買賣時機建議 — K 線型態 + 量價 + 隔日條件式觸發。
+function DailyBlock({ d }) {
+  const sc = d.score || {}
+  const totalColor = sc.total >= 4 ? GAIN : sc.total <= -2 ? LOSS : FLAT
+  return (
+    <div className="mt-1 pt-1.5 border-t border-[#1f1f1f] space-y-1">
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-gray-500">次日時機</span>
+        <span className="px-1.5 py-0.5 rounded bg-[#1A2330] text-gray-200">{d.candle_type}</span>
+        <span className="text-gray-400">位置 {d.position}</span>
+        <span className="font-semibold" style={{ color: totalColor }}>打分 {sc.total}（{d.bias}）</span>
+        <span className="text-gray-600">趨{sc.trend} K{sc.kline} 量{sc.volume} 位{sc.position}</span>
+      </div>
+      <div className="flex flex-col gap-0.5">
+        <span style={{ color: GAIN }}>偏多觸發：{(d.long_triggers || []).join('；')}</span>
+        <span style={{ color: LOSS }}>偏空觸發：{(d.short_triggers || []).join('；')}</span>
+      </div>
+      <div className="text-gray-300">建議買法：{d.buy_method}</div>
     </div>
   )
 }

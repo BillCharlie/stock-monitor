@@ -591,9 +591,14 @@ def get_position_analysis(symbol: str, entry: float, entry_date: str | None = No
     aggregate entry (weighted-average buy price) — not per purchase lot.
     """
     from position_strategy import analyze_position
-    result = analyze_position(symbol.strip().upper(), entry, entry_date)
+    from daily_signal import analyze_daily_signal
+    sym = symbol.strip().upper()
+    result = analyze_position(sym, entry, entry_date)
     if result.get("error"):
         raise HTTPException(status_code=404, detail=result["error"])
+    daily = analyze_daily_signal(sym)
+    if not daily.get("error"):
+        result["daily"] = daily
     return result
 
 
