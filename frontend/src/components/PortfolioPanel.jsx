@@ -735,23 +735,27 @@ function DailyBlock({ d }) {
   const sc = d.score || {}
   const totalColor = sc.total >= 4 ? GAIN : sc.total <= -2 ? LOSS : FLAT
   return (
-    <div className="mt-1 pt-1.5 border-t border-[#1f1f1f] space-y-1">
-      <div className="flex items-center gap-3 flex-wrap">
+    <div className="mt-1 pt-1.5 border-t border-[#1f1f1f] space-y-1 text-[10px] leading-tight">
+      <div className="flex items-center gap-2 flex-wrap">
         <span className="text-gray-500" title="T+1＝以今日收盤為基準的下一個交易日">明日時機(T+1)</span>
         <span className="px-1.5 py-0.5 rounded bg-[#1A2330] text-gray-200">{d.candle_type}</span>
         <span className="text-gray-400">位置 {d.position}</span>
         <span className="font-semibold" style={{ color: totalColor }}>打分 {sc.total}（{d.bias}）</span>
         <span className="text-gray-600">趨{sc.trend} K{sc.kline} 量{sc.volume} 位{sc.position}</span>
       </div>
-      <div className="flex flex-col gap-0.5">
-        <span style={{ color: GAIN }} className="font-semibold">明日偏多觸發</span>
-        {(d.long_triggers || []).map((t, i) => (
-          <span key={i} style={{ color: GAIN }} className="pl-2">（情況{i + 1}）{t}</span>
-        ))}
-        <span style={{ color: LOSS }} className="font-semibold mt-0.5">明日偏空觸發</span>
-        {(d.short_triggers || []).map((t, i) => (
-          <span key={i} style={{ color: LOSS }} className="pl-2">（情況{i + 1}）{t}</span>
-        ))}
+      <div className="grid grid-cols-2 gap-x-3">
+        <div className="flex flex-col gap-0.5">
+          <span style={{ color: GAIN }} className="font-semibold">明日偏多觸發</span>
+          {(d.long_triggers || []).map((t, i) => (
+            <span key={i} style={{ color: GAIN }} className="pl-1.5">（情況{i + 1}）{t}</span>
+          ))}
+        </div>
+        <div className="flex flex-col gap-0.5">
+          <span style={{ color: LOSS }} className="font-semibold">明日偏空觸發</span>
+          {(d.short_triggers || []).map((t, i) => (
+            <span key={i} style={{ color: LOSS }} className="pl-1.5">（情況{i + 1}）{t}</span>
+          ))}
+        </div>
       </div>
       <div className="text-gray-300">建議買法：{d.buy_method}</div>
     </div>
