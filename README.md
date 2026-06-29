@@ -1,361 +1,514 @@
-# Stock Monitor — 台灣 / 中國 / 美股即時監控與主動式 ETF 分析系統
-# Stock Monitor — Taiwan / China / US Stock Real-Time Monitor & Active ETF Analysis
-# https://billcharlie.github.io/stock-monitor/
-> **作者 / Author:** Ping yu-Chen, Taiwan
-> **版本 / Version:** v2.0
-> **授權 / License:** 請詳閱 `LICENSE` / See `LICENSE` — 商業使用須授權 / Commercial use requires written permission
+# Stock Monitor — 台灣 / 中國 / 美股即時監控、技術分析與主動式 ETF 系統
 
-**線上服務 / Live Service:**
-- 前端 / Frontend (GitHub Pages): https://billcharlie.github.io/stock-monitor/
-- 後端 API / Backend API (Railway): https://stock-monitor-production-b630.up.railway.app
+> Author: Ping yu-Chen, Taiwan
+> Repository: https://github.com/BillCharlie/stock-monitor
+> Live frontend: https://billcharlie.github.io/stock-monitor/
+> Backend API: https://stock-monitor-production-b630.up.railway.app
+> License: Source-available proprietary license. Commercial use, redistribution, hosted operation, and derivative commercial use require prior written permission. See [LICENSE](./LICENSE).
 
----
+Stock Monitor 是一套以 FastAPI + React 建構的股票監控與分析系統，涵蓋台灣股市、中國股市與美股。系統會自動抓取行情、K 線、技術指標、三大法人、融資融券、ETF 持股、新聞與政策資訊，並生成每日分析報告與 Email / PDF 版本。
 
-## 目錄 / Table of Contents
-
-- [系統簡介 / Overview](#系統簡介--overview)
-- [功能總覽 / Features](#功能總覽--features)
-- [環境需求 / Requirements](#環境需求--requirements)
-- [安裝 / Installation](#安裝--installation)
-- [環境設定 / Configuration](#環境設定--configuration)
-- [啟動服務 / Start Services](#啟動服務--start-services)
-- [排程任務 / Scheduled Jobs](#排程任務--scheduled-jobs)
-- [個股分析模型 / Stock Analysis Model](#個股分析模型--stock-analysis-model)
-- [主動式 ETF 分析 / Active ETF Analysis](#主動式-etf-分析--active-etf-analysis)
-- [主要 API / Key API Endpoints](#主要-api--key-api-endpoints)
-- [雲端部署 / Deployment](#雲端部署--deployment)
+此專案不是投資建議。所有分數、評等、預測與新聞摘要僅供研究、觀察與系統開發參考。
 
 ---
 
-## 系統簡介 / Overview
+## 目錄
 
-**中文：**
-Stock Monitor 是針對台灣 / 中國 / 美股市場設計的全自動股市監控與分析系統。系統每日在台股收盤（13:40）、中國 A 股收盤（15:10）與美股收盤（隔日 05:10）後自動執行技術分析，整合 60+ 技術指標訊號、三大法人籌碼、融資融券，並追蹤 34 支台灣主動式 ETF 的持股異動，每日早晨透過 GPT-4o 生成 HTML 報告並以 Email 夾帶 PDF 寄送。前端為 React SPA，部署於 GitHub Pages；後端 FastAPI 部署於 Railway。
-
-**English:**
-Stock Monitor is a fully automated stock monitoring and analysis system for Taiwan, China, and US markets. The system runs technical analysis after the Taiwan market close (13:40), China A-share close (15:10), and US market close (05:10 next day), integrating 60+ technical indicator signals, Taiwan institutional investor data (三大法人), margin trading data, and tracking of 34 Taiwan active ETFs for holdings changes. Each morning, GPT-4o generates an HTML report delivered by email with a PDF attachment. The React SPA frontend is deployed on GitHub Pages; the FastAPI backend runs on Railway.
-
----
-
-## 功能總覽 / Features
-
-**中文：**
-- **多指標技術分析** — 60+ 訊號加權評分（-2.0 ～ +2.0），五級評等（強力買進 / 買進 / 持有 / 賣出 / 強力賣出）
-- **主動式 ETF 持股追蹤** — 34 支台灣主動式 ETF（A 類股票型 / D 類債券型），每日抓取 MoneyDJ 持股明細，偵測新進入 / 退出 / 增減倉位異動
-- **三大法人 + 融資融券** — 外資 / 投信 / 自營商買賣超，3 日趨勢評分，融資融券比對分析
-- **籌碼集中度分析** — 赫芬達爾指數（HHI），主力進出辨識
-- **線性回歸預測** — 5 日 / 20 日預測，含 95% 信賴區間與 R² 準確度
-- **RSI / OBV 背離偵測** — RSI 5 日窗口背離 ±1.5 分；OBV 10 日窗口背離 ±1.5 分
-- **每日 GPT-4o 報告** — 自動合成技術分析 + 新聞 + 籌碼，生成 HTML 報告，Email 夾帶 PDF
-- **Trump 新聞監控** — 追蹤 X、Truth Social、白宮 RSS，納入早報政策面評估
-- **產業分類觀察清單** — 70+ 台灣細分類（半導體、AI 雲端、金融、生技等）、中國 A 股及美股
-- **主動式 ETF 產業分佈** — 各 ETF 持股跨產業匯總，含多時間段 baseline 追蹤（1d / 7d / 30d / 1y）
-
-**English:**
-- **Multi-indicator technical analysis** — 60+ signals with weighted scoring (-2.0 to +2.0); five-tier ratings (Strong Buy / Buy / Hold / Sell / Strong Sell)
-- **Active ETF holdings tracking** — 34 Taiwan active ETFs (A-type equity / D-type bond); daily scraping of MoneyDJ holdings; detects new positions, exits, and weight changes
-- **Institutional investor data (三大法人)** — Foreign / Trust / Dealer net buy/sell, 3-day trend scoring, margin trading analysis
-- **Chip concentration analysis** — Herfindahl-Hirschman Index (HHI), major trader identification
-- **Linear regression forecast** — 5-day and 20-day price prediction with 95% confidence intervals and R² fit
-- **RSI / OBV divergence detection** — RSI 5-bar window divergence ±1.5; OBV 10-bar window divergence ±1.5
-- **Daily GPT-4o report** — Synthesizes technical analysis + news + institutional data; delivers HTML report + PDF via email
-- **Trump news monitoring** — Tracks X (Twitter), Truth Social, and White House RSS for policy-impact assessment
-- **Industry watchlist** — 70+ Taiwan subcategories (semiconductors, AI/cloud, financials, biotech, etc.), China A-shares, and US stocks
-- **Active ETF sector distribution** — Cross-ETF holdings aggregation with multi-horizon baseline tracking (1d / 7d / 30d / 1y)
+- [最新功能摘要](#最新功能摘要)
+- [系統架構](#系統架構)
+- [市場與觀察清單](#市場與觀察清單)
+- [技術分析模型](#技術分析模型)
+- [每日報告與中國股市板塊](#每日報告與中國股市板塊)
+- [主動式 ETF 分析](#主動式-etf-分析)
+- [資產管理與隔日策略](#資產管理與隔日策略)
+- [新聞與政策監控](#新聞與政策監控)
+- [安裝與本機啟動](#安裝與本機啟動)
+- [環境變數](#環境變數)
+- [API 端點](#api-端點)
+- [排程任務](#排程任務)
+- [部署](#部署)
+- [授權與保護](#授權與保護)
 
 ---
 
-## 環境需求 / Requirements
+## 最新功能摘要
 
-| 項目 / Item | 版本 / Version |
-|-------------|----------------|
-| Python | ≥ 3.10 |
-| Node.js | ≥ 18 |
-| OpenAI API Key | GPT-4o 建議 / GPT-4o recommended |
-| Resend API Key | 雲端部署推薦 / Recommended for cloud |
-| FinMind Token | 三大法人 / 融資融券數據（可選 / optional） |
+目前版本的重點能力：
+
+- 台灣 / 中國 / 美國三市場觀察清單，合計約 295 個標的。
+- 中國股市已獨立成為一級市場分類，並在日報中有單獨板塊。
+- 中國股市目前涵蓋新能源汽車、半導體、光通訊等分類，例如：
+  - 比亞迪 `002594.SZ`
+  - 賽力斯 `601127.SS`
+  - 芯聯集成 `688469.SS`
+  - 士蘭微 `600460.SS`
+  - 華潤微 `688396.SS`
+  - 斯達半導 `603290.SS`
+  - 揚杰科技 `300373.SZ`
+  - 英諾賽科 `02577.HK`
+  - 三安光電 `600703.SS`
+  - 立昂微 `605358.SS`
+  - 卓勝微 `300782.SZ`
+  - 長電科技 `600584.SS`
+  - 長飛光纖 `601869.SS`
+- 對中國 A 股 / 港股使用與台股、美股同一套技術分析流程：K 線、MA、RSI、KD、Bollinger Bands、OBV、量能、支撐壓力、線性回歸預測與評等。
+- 每日報告輸出 `market_sections`，前端與 Email fallback 都能顯示「中國股市」獨立區塊。
+- 台灣顏色慣例：紅色代表上漲 / 買進 / 偏多，綠色代表下跌 / 賣出 / 偏空。
+- 主動式 ETF 持股追蹤目前涵蓋 30 支台灣主動式 ETF。
+- 支援資產管理、多人持倉、隔日策略、技術訊號與跳空/關卡分析。
+- 寫入型 API 使用雙密鑰保護：報告管理密鑰與股票管理密鑰分離。
 
 ---
 
-## 安裝 / Installation
+## 系統架構
 
-### 後端 / Backend
+```text
+GitHub Pages
+└─ React SPA frontend
+   ├─ 市場總覽
+   ├─ 觀察清單
+   ├─ 技術分析
+   ├─ 主動式 ETF
+   ├─ 資產管理
+   ├─ 新聞 / TrumpNews
+   └─ Access key panel
 
-**Windows PowerShell：**
+Railway / Local FastAPI backend
+├─ /api/* REST API
+├─ APScheduler 排程任務
+├─ yfinance / TWSE / TPEX / FinMind / MoneyDJ / news sources
+├─ GPT 報告生成
+├─ PDF 報告生成
+├─ Email 寄送
+└─ JSON cache / user data files
+```
+
+後端以單一 FastAPI 服務同時提供 API 與已建置的 React 靜態檔。正式部署時，前端通常由 GitHub Pages 服務，後端由 Railway 服務；本機開發時也可以直接由 FastAPI 掛載 `backend/static`。
+
+---
+
+## 市場與觀察清單
+
+觀察清單在 [backend/watchlist.py](./backend/watchlist.py) 中維護，採用遞迴階層：
+
+```text
+市場 / 地區
+└─ 產業
+   └─ 細分類
+      └─ 股票列表
+```
+
+每個股票節點格式：
+
+```json
+{
+  "symbol": "688469.SS",
+  "name": "芯聯集成",
+  "name_en": "United Nova Technology Co., Ltd.",
+  "tags": ["A股", "特色工藝晶圓代工", "功率半導體/MEMS"]
+}
+```
+
+目前內建三個主要市場：
+
+| 市場 | 目前範圍 | 說明 |
+|---|---:|---|
+| 台灣 | 約 211 檔 | 半導體、AI、金融、生技、鋼鐵、航運、資源、主動式 ETF 等 |
+| 中國股市 | 約 13 檔 | 新能源汽車、功率半導體、晶圓代工、封測、光通訊等 |
+| 美國 | 約 71 檔 | 半導體、AI GPU、資源、黃金、銅礦、稀土、ETF 等 |
+
+前端支援內建觀察清單與使用者自訂觀察清單。使用者自訂清單由 `/api/user-watchlist` 儲存，最多支援 5 層分類。
+
+---
+
+## 技術分析模型
+
+每個標的會透過 `analyze_stock()` 執行同一套規則式技術分析。支援台股、中國 A 股 / 港股、美股與 ETF，只要資料來源能回傳足夠 OHLCV K 線即可。
+
+### 評分與評等
+
+模型會把多個訊號加總成分數，再轉成五級評等：
+
+| 評等 key | 顯示名稱 | 條件 |
+|---|---|---:|
+| `strong_buy` | 強力買進 ▲▲ | score ≥ 2.5 |
+| `buy` | 買進 ▲ | score ≥ 1.0 |
+| `hold` | 持有 ─ | -1.0 ≤ score < 1.0 |
+| `sell` | 賣出 ▼ | -2.5 ≤ score < -1.0 |
+| `strong_sell` | 強力賣出 ▼▼ | score < -2.5 |
+
+### 核心訊號
+
+| 模組 | 訊號 | 分數方向 |
+|---|---|---|
+| MA 短期趨勢 | MA5 > MA10 / MA5 < MA10 | ±1.0 |
+| MA 中期趨勢 | MA20 > MA60 / MA20 < MA60 | ±1.0 |
+| MA5/MA20 交叉 | 黃金交叉 / 死亡交叉 | ±2.0 |
+| 季線位置 | 價格在 MA60 上 / 下 | ±0.5 |
+| 年線位置 | 價格在 MA240 上 / 下 | ±0.5 |
+| RSI | 超買、超賣、偏多、偏空 | -2.0 到 +2.0 |
+| RSI 背離 | 頂背離 / 底背離 | ±1.5 |
+| KD | 黃金交叉、死亡交叉、超買超賣 | ±0.5 到 ±2.0 |
+| Bollinger Bands | 突破、貼近上下軌、通道收斂 | -0.5 到 +1.0 |
+| Volume | 爆量上漲 / 爆量下跌 | ±1.5 |
+| OBV | 價量背離、同步上揚 / 下降 | ±0.5 到 ±1.5 |
+| 法人 / 機構 | 三大法人、持續買賣、機構持股 | 依市場資料可用性加權 |
+
+### 台灣 KD 公式
+
+```text
+RSV = (Close - Low_14) / (High_14 - Low_14) × 100
+K   = (2/3) × prev_K + (1/3) × RSV
+D   = (2/3) × prev_D + (1/3) × K
+```
+
+### 線性回歸預測
+
+模型會對最近 20 / 60 根 K 棒做 OLS 線性回歸，輸出：
+
+- 5 日預測價格
+- 20 日預測價格
+- 預測漲跌幅
+- 95% confidence interval
+- R² goodness-of-fit
+- 每日斜率
+
+這個預測是技術模型輸出，不代表實際投資建議。
+
+---
+
+## 每日報告與中國股市板塊
+
+每日分析由 `generate_daily_report()` 產生，會先把觀察清單攤平成股票列表、去重，並使用 `ThreadPoolExecutor` 併發分析。
+
+報告核心結構：
+
+```json
+{
+  "date": "2026-06-29",
+  "generated_at": "2026-06-29 07:00:00",
+  "market_sentiment": "中性",
+  "top_opportunities": [],
+  "top_risks": [],
+  "sector_summary": {},
+  "market_sections": {
+    "台灣": {},
+    "中國股市": {},
+    "美國": {}
+  },
+  "all_results": {}
+}
+```
+
+`market_sections["中國股市"]` 會收納比亞迪、芯聯集成等中國市場標的的分析結果，因此前端日報與 Email fallback 都能單獨呈現「中國股市」章節。
+
+GPT 報告會綜合：
+
+- 三市場技術評分
+- 台股籌碼與 ETF 資料
+- 中國新能源汽車與半導體重點標的
+- 美股與半導體 / 資源類股
+- 新聞與政策風險
+- TrumpNews / White House / X / Truth Social 相關政策訊息
+
+---
+
+## 主動式 ETF 分析
+
+主動式 ETF 模組位於 [backend/etf_holdings.py](./backend/etf_holdings.py)，目前追蹤 30 支台灣主動式 ETF：
+
+- 股票型 A 類：`00980A` 到 `00999A`，以及 `00400A`、`00401A`、`00403A`
+- 債券型 D 類：`00980D` 到 `00986D`
+
+主要能力：
+
+- 從 MoneyDJ / 備援來源抓取持股明細。
+- 產生每支 ETF 前 N 大持股。
+- 比對前後快照，偵測：
+  - 新進入
+  - 已退出
+  - 加碼
+  - 減碼
+- 彙總跨 ETF 產業分布。
+- 建立 1d / 7d / 30d / 91d / 182d / 273d / 365d baseline，觀察產業權重變化。
+- 在前端與 Email 報告中呈現 ETF 持股與異動摘要。
+
+顏色規則遵循台灣盤面慣例：
+
+- 紅色：上漲、買進、偏多、新進入、加碼
+- 綠色：下跌、賣出、偏空、退出、減碼
+
+---
+
+## 資產管理與隔日策略
+
+資產管理功能透過 `/api/portfolios` 儲存多人持股資料，前端可建立不同人物 / 帳戶的持倉清單。
+
+`/api/portfolio/position-analysis` 會根據持股成本、張數、現價與技術訊號，輸出持倉狀態與隔日策略參考，例如：
+
+- 損益與報酬率
+- 目前價格相對成本位置
+- 是否接近停利 / 停損 / 壓力 / 支撐
+- 隔日可關注價位
+- 技術訊號與持倉訊號合併後的行動提示
+
+相關策略文件：
+
+- [docs/position-management-strategy.md](./docs/position-management-strategy.md)
+- [docs/next-day-timing-strategy.md](./docs/next-day-timing-strategy.md)
+
+---
+
+## 新聞與政策監控
+
+新聞模組會依照產業分類抓取消息，並在報告中和技術訊號一起使用。
+
+TrumpNews 模組會追蹤：
+
+- Trump / 政策相關新聞
+- X / Twitter 來源
+- Truth Social 來源
+- White House RSS
+
+這些資訊會被納入晨報，特別用於評估關稅、出口管制、半導體政策、能源與地緣政治風險。
+
+---
+
+## 安裝與本機啟動
+
+### 需求
+
+| 項目 | 建議版本 |
+|---|---|
+| Python | 3.10+ |
+| Node.js | 18+ |
+| npm | 9+ |
+| OpenAI API key | GPT 報告需要 |
+| Resend API key 或 Gmail App Password | Email 寄送需要 |
+| FinMind token | 台股三大法人 / 融資融券資料建議設定 |
+
+### 後端
 
 ```powershell
 cd backend
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+python main.py
 ```
 
-**macOS / Linux：**
+或：
 
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+uvicorn main:app --reload --port 8765
 ```
 
-### 前端 / Frontend
+健康檢查：
+
+```text
+http://127.0.0.1:8765/api/health
+```
+
+### 前端
 
 ```bash
 cd frontend
 npm install
-```
-
----
-
-## 環境設定 / Configuration
-
-複製設定範本 / Copy template:
-
-```bash
-cp backend/.env.example backend/.env
-```
-
-編輯 `backend/.env` / Edit `backend/.env`:
-
-```dotenv
-# OpenAI（GPT 報告必要 / required for GPT reports）
-OPENAI_API_KEY=sk-proj-...
-
-# Email 傳輸 / Email transport（二選一 / choose one）
-# Option A: Resend（雲端部署推薦 / recommended for Railway）
-RESEND_API_KEY=re_...
-
-# Option B: Gmail SMTP（本機開發 / local dev only）
-GMAIL_SENDER=your@gmail.com
-GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
-
-# 報告收件人 / Report recipients（最多三位 / up to 3）
-REPORT_RECIPIENT=your@email.com
-REPORT_RECIPIENT_2=optional@email.com
-
-# 報告時間（台灣時間 / Taiwan time）
-REPORT_HOUR=7
-REPORT_MINUTE=0
-
-# API 保護金鑰 / Write-endpoint protection
-# 同步設定至 GitHub Secrets: VITE_API_SECRET
-API_SECRET_REPORT=your-report-secret
-API_SECRET_STOCK=your-stock-secret
-```
-
-> Write 端點（POST/DELETE）需在請求標頭加入 `X-API-Secret: <secret>`，與 `API_SECRET_REPORT` 或 `API_SECRET_STOCK` 比對。
-> Write endpoints require `X-API-Secret: <secret>` header matching `API_SECRET_REPORT` or `API_SECRET_STOCK`.
-
----
-
-## 啟動服務 / Start Services
-
-### 後端 / Backend
-
-```powershell
-cd backend
-python main.py
-```
-
-或使用 uvicorn / or with uvicorn:
-
-```bash
-uvicorn main:app --reload --port 8765
-```
-
-健康確認 / Health check:
-
-```
-http://127.0.0.1:8765/api/health
-```
-
-### 前端（開發模式）/ Frontend (Dev Mode)
-
-```bash
-cd frontend
 npm run dev
 ```
 
-開啟 / Open: `http://127.0.0.1:5173`
-
-正式建置 / Production build:
+目前 `dev` script 使用 `vite build --watch`，會持續建置靜態檔。正式建置：
 
 ```bash
 cd frontend
 npm run build
 ```
 
-建置產物在 `frontend/dist/`，由 GitHub Actions 自動部署至 GitHub Pages。
-Build output goes to `frontend/dist/`, auto-deployed to GitHub Pages via GitHub Actions.
-
 ---
 
-## 排程任務 / Scheduled Jobs
+## 環境變數
 
-所有排程以 **Asia/Taipei** 時區執行 / All jobs run in **Asia/Taipei** timezone:
+建立 `backend/.env`：
 
-| 時間 / Time | 說明 / Description | 觸發條件 / Trigger |
-|-------------|--------------------|--------------------|
-| 每日 13:40（週一–五）| 台股收盤分析 / Taiwan market close analysis | 週一–五 / Mon–Fri |
-| 每日 15:10（週一–五）| 中國 A 股收盤分析 / China A-share close analysis | 週一–五 / Mon–Fri |
-| 每日 05:10（週二–六）| 美股收盤分析 / US market close analysis | 週二–六 / Tue–Sat |
-| 每日 07:00（可設定）| 早報 Email — 技術分析 + GPT 報告 + PDF | 週一–五 / Mon–Fri |
-| 每日 18:00（可設定）| ETF 持股更新 / Active ETF holdings refresh | 週一–五 / Mon–Fri |
-| 每日 18:30（可設定）| 三大法人 / 融資融券 / ETF / 新聞更新 | 週一–五 / Mon–Fri |
-| 每日 19:00（可設定）| 數據健康報告 / Data health report | 每日 / Daily |
-| 每 5 小時 | 新聞刷新 / News refresh | 持續 / Continuous |
+```dotenv
+# GPT 報告
+OPENAI_API_KEY=sk-proj-...
 
-時間可透過環境變數調整 / Time overrides via env vars:
-`REPORT_HOUR`, `REPORT_MINUTE`, `ETF_HOLDINGS_HOUR`, `DATA_REFRESH_HOUR`, `DATA_HEALTH_HOUR`
+# Email transport：Resend 或 Gmail 擇一
+RESEND_API_KEY=re_...
+GMAIL_SENDER=your@gmail.com
+GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
 
----
+# Report recipients
+REPORT_RECIPIENT=your@email.com
+REPORT_RECIPIENT_2=optional@email.com
+REPORT_RECIPIENT_3=optional@email.com
 
-## 個股分析模型 / Stock Analysis Model
+# API write protection
+API_SECRET_REPORT=your-report-secret
+API_SECRET_STOCK=your-stock-secret
 
-系統以加權複合評分計算每支股票的技術訊號，評分範圍 **-2.0 ～ +2.0**，匯總後對應五級評等。
+# Frontend / GitHub Pages build
+VITE_API_BASE=https://stock-monitor-production-b630.up.railway.app
+VITE_API_SECRET=your-stock-secret
 
-The system computes a weighted composite score from technical signals in the range **-2.0 to +2.0**, mapping to five rating tiers.
+# Schedule overrides, Asia/Taipei
+REPORT_HOUR=7
+REPORT_MINUTE=0
+ETF_HOLDINGS_HOUR=18
+ETF_HOLDINGS_MINUTE=0
+DATA_REFRESH_HOUR=18
+DATA_REFRESH_MINUTE=0
+DATA_HEALTH_HOUR=19
+DATA_HEALTH_MINUTE=0
 
-### 評分機制 / Scoring Mechanism
-
-| 指標 / Indicator | 訊號 / Signal | 分數 / Score |
-|-----------------|---------------|--------------|
-| MA 黃金交叉 (MA5>MA20) | 多 / Bull | +2.0 |
-| MA 死亡交叉 (MA5<MA20) | 空 / Bear | -2.0 |
-| 短期趨勢 (MA5 vs MA10) | 多/空 / Bull/Bear | ±1.0 |
-| 中期趨勢 (MA20 vs MA60) | 多/空 / Bull/Bear | ±1.0 |
-| 季線位置 (Price vs MA60) | 上方/下方 / Above/Below | ±0.5 |
-| 年線位置 (Price vs MA240) | 上方/下方 / Above/Below | ±0.5 |
-| RSI 超買 (≥80) | 空 / Bear | -2.0 |
-| RSI 超賣 (≤20) | 多 / Bull | +2.0 |
-| RSI 背離（5 日視窗）| 頂背離/底背離 / Top/Bottom divergence | ±1.5 |
-| KD 黃金交叉 | 多 / Bull | +2.0 |
-| KD 死亡交叉 | 空 / Bear | -2.0 |
-| OBV 背離（10 日視窗）| 量價背離/量增 / Volume divergence | ±1.5 |
-| 成交量比（>2.0 上漲日）| 爆量做多 / Volume surge bull | +1.5 |
-| 成交量比（>2.0 下跌日）| 爆量出逃 / Volume surge bear | -1.5 |
-| 機構淨買超（三大法人）| 合計 / Total | ±1.0 |
-| 機構 3 日持續買超 | 趨勢 / Trend | +1.0 |
-
-**台灣 KD 公式（與國際標準不同）/ Taiwan KD Formula (different from international):**
-```
-RSV = (Close - Low_14) / (High_14 - Low_14) × 100
-K   = (2/3) × prev_K + (1/3) × RSV
-D   = (2/3) × prev_D + (1/3) × K
+# Optional data / news integrations
+FINMIND_TOKEN=...
+TRUMP_X_BEARER_TOKEN=...
+TRUMP_X_USER_ID=...
+TRUMP_X_RSS_URL=...
+DATA_DIR=...
+REPORT_MAX_WORKERS=8
+MARKET_DATA_REFRESH_SLEEP_SECONDS=0.2
 ```
 
-**線性回歸預測 / Linear Regression Forecast:**
-- 擬合最近 20 / 60 根 K 棒，輸出 5 日 / 20 日預測價格
-- 含 95% 信賴區間 [lower, upper] 與 R² 擬合準確度
+### API 密鑰規則
+
+寫入型端點需要 `X-API-Secret` header，且前端會送出 SHA-256 後的密鑰值。
+
+後端分成兩組權限：
+
+| 密鑰 | 用途 |
+|---|---|
+| `API_SECRET_REPORT` | 觸發分析、GPT 報告、全量刷新、健康檢查、測試 Email |
+| `API_SECRET_STOCK` | 自訂股票、使用者觀察清單、資產管理 |
+
+GET 端點大多公開讀取；POST / PUT / DELETE 端點需要對應密鑰。
 
 ---
 
-## 主動式 ETF 分析 / Active ETF Analysis
+## API 端點
 
-系統追蹤 34 支台灣主動式 ETF，每日從 MoneyDJ 抓取完整持股明細。
+### 系統與授權
 
-The system tracks 34 Taiwan active ETFs with daily holdings scraping from MoneyDJ.
+| Method | Path | 說明 |
+|---|---|---|
+| GET | `/api/health` | 服務狀態、排程與刷新狀態 |
+| POST | `/api/auth/ping` | 驗證 access key 並可發送登入通知 |
+| GET | `/api/test/env` | 檢查環境變數是否設定，需 report key |
+| GET | `/api/test/quotes` | 批次測試報價 |
+| POST | `/api/test/email` | 寄送測試 Email，需 report key |
 
-### ETF 分類 / ETF Classification
+### 觀察清單與資產
 
-| 類型 / Type | 代碼範圍 / Code Range | 說明 / Description |
-|-------------|----------------------|---------------------|
-| A 類（股票型）/ A-type (equity) | 00980A–00999A、00400A–00403A | 主動式股票 ETF / Active equity ETF |
-| D 類（債券型）/ D-type (bond) | 00980D–00986D | 主動式債券 ETF / Active bond ETF |
+| Method | Path | 說明 |
+|---|---|---|
+| GET | `/api/watchlist` | 內建 + 使用者觀察清單 |
+| GET | `/api/user-watchlist` | 使用者自訂階層 |
+| PUT | `/api/user-watchlist` | 儲存使用者自訂階層，需 stock key |
+| GET | `/api/custom-stocks` | 自訂股票 |
+| POST | `/api/custom-stocks` | 新增自訂股票，需 stock key |
+| DELETE | `/api/custom-stocks/{symbol}` | 刪除自訂股票，需 stock key |
+| GET | `/api/portfolios` | 多人資產管理資料 |
+| PUT | `/api/portfolios` | 儲存多人資產管理資料，需 stock key |
+| GET | `/api/portfolio/position-analysis` | 持倉與隔日策略分析 |
 
-### 持股分析功能 / Holdings Analysis
+### 股票資料與分析
 
-- **持股明細** — 每支 ETF 前 N 大持股、權重百分比、股數
-- **異動偵測** — `compute_holdings_changes()` 比對前後快照，標記：
-  - 🟢 新進入 / New position
-  - 🔴 已退出 / Exited position
-  - ⬆️ 加碼 / Increased weight
-  - ⬇️ 減碼 / Decreased weight
-- **產業分佈** — 按台灣行業代碼（01–38）分類彙整，含多時間段對比
-- **Email 摘要** — 每日晨報中自動附上各 ETF 前 5 大持股及異動標記
+| Method | Path | 說明 |
+|---|---|---|
+| GET | `/api/stocks/{symbol}/quote` | 即時 / 延遲報價 |
+| GET | `/api/stocks/{symbol}/realtime` | 低延遲即時報價 |
+| GET | `/api/stocks/{symbol}/kline` | OHLCV + MA / RSI / KD / OBV / Bollinger |
+| GET | `/api/stocks/{symbol}/intraday-kline` | 分鐘級 K 線 |
+| GET | `/api/stocks/{symbol}/analysis` | 技術分析結果 |
+| GET | `/api/stocks/{symbol}/investors` | 三大法人 / 機構資料 |
+| GET | `/api/stocks/{symbol}/margin` | 台股融資融券 |
+| GET | `/api/stocks/{symbol}/chip-analysis` | 籌碼集中度 |
+| GET | `/api/stocks/{symbol}/major-traders` | 主力交易型態 |
+| GET | `/api/stocks/{symbol}/institutions` | 可能機構辨識 |
+| GET | `/api/market/overview` | 指數與商品期貨概覽 |
+
+### ETF、報告與新聞
+
+| Method | Path | 說明 |
+|---|---|---|
+| GET | `/api/etf-holdings` | 全部主動式 ETF 持股 |
+| GET | `/api/etf-holdings/{symbol}` | 單支主動式 ETF 持股 |
+| GET | `/api/etf-holdings/sector-summary` | 主動式 ETF 產業分布 |
+| GET | `/api/analysis/daily-report` | 結構化每日報告 |
+| POST | `/api/analysis/generate` | 觸發每日分析，需 report key |
+| POST | `/api/analysis/gpt-report` | 生成 GPT + PDF + Email 報告，需 report key |
+| GET | `/api/analysis/gpt-report` | 取得最新 GPT HTML |
+| GET | `/api/analysis/download-report` | 下載最新 PDF |
+| POST | `/api/data/refresh-all` | 後台刷新資料，需 report key |
+| POST | `/api/health/data-check` | 產生資料健康報告，需 report key |
+| GET | `/api/news` | 產業新聞 |
+| GET | `/api/trump-news` | Trump / 政策相關新聞 |
 
 ---
 
-## 主要 API / Key API Endpoints
+## 排程任務
 
-| 方法 / Method | 路徑 / Path | 說明 / Description |
-|---------------|------------|---------------------|
-| GET | `/api/stocks/{symbol}/quote` | 即時報價 / Real-time quote |
-| GET | `/api/stocks/{symbol}/kline` | K 線 + 指標 / K-line with indicators |
-| GET | `/api/stocks/{symbol}/analysis` | 技術分析評分 / Technical analysis score |
-| GET | `/api/stocks/{symbol}/investors` | 三大法人 / 融資融券 |
-| GET | `/api/stocks/{symbol}/chip-analysis` | 籌碼集中度 / Chip concentration |
-| GET | `/api/etf-holdings` | 全部主動式 ETF 持股 / All active ETF holdings |
-| GET | `/api/etf-holdings/{symbol}` | 單支 ETF 持股 / Single ETF holdings |
-| GET | `/api/etf-holdings/sector-summary` | 產業分佈彙總 / Sector distribution summary |
-| GET | `/api/analysis/daily-report` | 每日分析報告 / Daily analysis report |
-| GET | `/api/news` | 產業分類新聞 / Categorized news |
-| GET | `/api/trump-news` | Trump 相關新聞 / Trump-related news |
-| GET | `/api/market/overview` | 大盤指數 / Market indices |
-| GET | `/api/watchlist` | 觀察清單 / Watchlist |
-| POST | `/api/analysis/generate` | 觸發分析（需 Auth）/ Trigger analysis (auth required) |
-| POST | `/api/data/refresh-all` | 全量資料更新（需 Auth）/ Refresh all data (auth required) |
+所有排程使用 `Asia/Taipei` 時區。
 
-> POST / DELETE 端點需標頭 `X-API-Secret: <secret>`。
-> POST / DELETE endpoints require `X-API-Secret: <secret>` header.
+| 時間 | 頻率 | 任務 |
+|---|---|---|
+| 05:10 | 週二到週六 | 美股收盤後分析 |
+| 13:40 | 週一到週五 | 台股收盤後分析 |
+| 15:10 | 週一到週五 | 中國 A 股收盤後分析 |
+| `REPORT_HOUR:REPORT_MINUTE` | 週一到週五 | 晨報分析、GPT 報告、PDF、Email |
+| 每 5 小時 | 持續 | 新聞與 TrumpNews 快取刷新 |
+| `ETF_HOLDINGS_HOUR:ETF_HOLDINGS_MINUTE` | 週一到週五 | 主動式 ETF 持股刷新 |
+| `DATA_REFRESH_HOUR:DATA_REFRESH_MINUTE` | 每日 | 三大法人、融資融券、ETF、新聞刷新 |
+| `DATA_HEALTH_HOUR:DATA_HEALTH_MINUTE` | 每日 | 資料健康報告 |
 
 ---
 
-## 雲端部署 / Deployment
+## 部署
 
-### 架構 / Architecture
+### GitHub Pages 前端
 
+`.github/workflows/deploy.yml` 會建置前端並部署到 GitHub Pages。需要設定 repository secrets：
+
+```text
+VITE_API_BASE
+VITE_API_SECRET
 ```
-GitHub Pages  ──→  frontend (React SPA)
-     ↕  API calls
-Railway        ──→  backend (FastAPI)
-                    ├─ APScheduler（排程分析 / scheduled analysis）
-                    ├─ Email（Resend API）
-                    └─ Cache（JSON files in /data）
-```
 
-### Railway 後端部署 / Railway Backend
+### Railway 後端
 
-```bash
-# Railway 自動從 Procfile 或 railway.toml 啟動
+後端可使用 `backend/Procfile` 啟動：
+
+```text
 uvicorn main:app --host 0.0.0.0 --port $PORT
 ```
 
-**Railway 環境變數 / Environment Variables:**
+Railway 建議設定：
 
-```
-OPENAI_API_KEY        = sk-proj-...
-RESEND_API_KEY        = re_...
-REPORT_RECIPIENT      = your@email.com
-API_SECRET_REPORT     = your-report-secret
-API_SECRET_STOCK      = your-stock-secret
-REPORT_HOUR           = 7
-REPORT_MINUTE         = 0
-```
-
-### GitHub Pages 前端部署 / GitHub Pages Frontend
-
-GitHub Actions 自動建置並部署。設定 Repository Secret：
-
-GitHub Actions auto-builds and deploys. Set Repository Secrets:
-
-```
-VITE_API_BASE    = https://stock-monitor-production-b630.up.railway.app
-VITE_API_SECRET  = your-stock-secret
+```text
+OPENAI_API_KEY
+RESEND_API_KEY
+REPORT_RECIPIENT
+API_SECRET_REPORT
+API_SECRET_STOCK
+DATA_DIR
+REPORT_HOUR
+REPORT_MINUTE
 ```
 
 ---
 
-## 授權聲明 / License Notice
+## 授權與保護
 
-本系統核心代碼受自訂授權條款（Source Available License v2.0）保護。
+本專案採用自訂 Source-Available Proprietary License，重點如下：
 
-This software is protected under a custom Source Available License v2.0.
+- 原始碼可供個人、教育、研究與非商業本機使用。
+- 禁止未授權商業使用、SaaS 託管、API 服務、轉售、再授權、商業整合與競品化使用。
+- 禁止移除作者、版權、授權與歸屬資訊。
+- 衍生作品、展示、研究或引用必須標示作者與來源。
+- 核心架構、技術分析模型、ETF pipeline、觀察清單 taxonomy、報告生成流程與資料處理邏輯均明確列為受保護內容。
+- 第三方依賴各自受其原授權約束。
 
-- 任何使用、下載、部署、衍生開發，均須明確標示作者：**Ping yu-Chen, Taiwan**
-- Any use, download, deployment, or derivative work must clearly credit: **Ping yu-Chen, Taiwan**
-- 商業使用須事先取得書面授權 / Commercial use requires prior written authorization
-- 商業授權洽詢 / Commercial licensing: **chenbill718@gmail.com**
-
-詳見 [LICENSE](./LICENSE) / See [LICENSE](./LICENSE) for full terms.
+完整條款請見 [LICENSE](./LICENSE)。若需商業授權，請聯絡：chenbill718@gmail.com。
