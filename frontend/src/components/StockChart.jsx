@@ -304,11 +304,15 @@ export default function StockChart({ symbol, stockName, interval, marks, levels,
     } finally {
       setLoading(false)
     }
-  }, [symbol, interval, applyMarks, applyLevels])
+    // Only reload (and re-fit the view) when the symbol/interval changes — NOT
+    // when marks/levels toggle, so the user's zoom is preserved.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, interval])
 
   useEffect(() => { loadData() }, [loadData])
 
-  // Reapply overlays when marks/levels change (data already loaded)
+  // Reapply overlays when marks/levels change (data already loaded); these only
+  // add/remove price lines & markers and never touch the time scale (no re-zoom).
   useEffect(() => { applyMarks() }, [applyMarks])
   useEffect(() => { applyLevels() }, [applyLevels])
 
