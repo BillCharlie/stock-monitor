@@ -2,6 +2,7 @@
 
 > 對應實作：[`backend/position_strategy.py`](../backend/position_strategy.py)、API `GET /api/portfolio/position-analysis`、前端「資產管理」分頁。
 > 本文同時取代原始的 Word 設計稿，作為策略的唯一權威說明。
+> 短線進出時機（明日 T+1）另見 [明日(T+1) 短線買賣時機策略](./next-day-timing-strategy.md)。
 
 ---
 
