@@ -208,19 +208,23 @@ def _trailing_stop(profit_R: float, entry: float, peak: float, ma20: float | Non
     return max(ma20 or 0, peak * 0.90)
 
 
-def analyze_position(symbol: str, entry_price: float, entry_date: str | None = None) -> dict:
+def analyze_position(symbol: str, entry_price: float | None = None, entry_date: str | None = None) -> dict:
     """
     Snapshot position analysis based on the holding's aggregate entry (avg price).
 
-    entry_price : weighted-average buy price for the whole holding
+    entry_price : weighted-average buy price for the whole holding. If omitted
+                  (None/0), the latest close is used as an assumed entry — useful
+                  for analysing any watched stock "as if entering now".
     entry_date  : earliest purchase date (YYYY-MM-DD); used for peak/drawdown window
     """
-    if not entry_price or entry_price <= 0:
-        return {"error": "INVALID_ENTRY"}
-
     df = get_ohlcv(symbol)
     if df is None or df.empty or len(df) < 60:
         return {"error": "INSUFFICIENT_DATA"}
+
+    assumed_entry = False
+    if not entry_price or entry_price <= 0:
+        entry_price = float(df["Close"].iloc[-1])
+        assumed_entry = True
 
     ma = calculate_ma(df, [5, 10, 20, 60])
     bb = calculate_bollinger_bands(df)
@@ -285,6 +289,7 @@ def analyze_position(symbol: str, entry_price: float, entry_date: str | None = N
     return {
         "symbol": symbol,
         "entry_price": r(entry_price),
+        "assumed_entry": assumed_entry,
         "close": r(close),
         "pnl_pct": r(pnl_pct * 100),
         "atr_pct": r(atr_pct * 100),

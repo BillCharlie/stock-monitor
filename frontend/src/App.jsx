@@ -7,6 +7,7 @@ import NewsPanel from './components/NewsPanel.jsx'
 import TrumpNewsPanel from './components/TrumpNewsPanel.jsx'
 import ActiveEtfPanel from './components/ActiveEtfPanel.jsx'
 import PortfolioPanel from './components/PortfolioPanel.jsx'
+import ChartStrategyPanel from './components/ChartStrategyPanel.jsx'
 import AccessKeyPanel from './components/AccessKeyPanel.jsx'
 import { DataStatusPanel } from './components/AnalysisPanel.jsx'
 import { api, keys } from './api/stocks.js'
@@ -260,7 +261,16 @@ export default function App() {
 
           <div className="flex-1 min-h-0 overflow-hidden">
             {activeTab === 'chart' && (
-              <StockChart symbol={selected.symbol} stockName={selected.name} interval={interval} marks={selected.marks} levels={selected.levels} />
+              <div className="flex flex-col h-full min-h-0">
+                <ChartStrategyPanel
+                  symbol={selected.symbol}
+                  name={selected.name}
+                  onMark={(marks, levels) => setSelected(s => ({ ...s, marks, levels }))}
+                />
+                <div className="flex-1 min-h-0">
+                  <StockChart symbol={selected.symbol} stockName={selected.name} interval={interval} marks={selected.marks} levels={selected.levels} />
+                </div>
+              </div>
             )}
             {activeTab === 'analysis' && (
               <AnalysisPanel symbol={selected.symbol} stockName={selected.name} mode="single" />

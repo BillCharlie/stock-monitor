@@ -585,10 +585,11 @@ def put_portfolios(body: PortfoliosBody):
 
 
 @app.get("/api/portfolio/position-analysis")
-def get_position_analysis(symbol: str, entry: float, entry_date: str | None = None):
+def get_position_analysis(symbol: str, entry: float | None = None, entry_date: str | None = None):
     """
-    Position-management strategy snapshot for one holding, computed from its
-    aggregate entry (weighted-average buy price) — not per purchase lot.
+    Position-management + next-day-timing snapshot. `entry` is the holding's
+    aggregate weighted-average price; if omitted, the latest close is used as an
+    assumed entry so any watched stock can be analysed "as if entering now".
     """
     from position_strategy import analyze_position
     from daily_signal import analyze_daily_signal
