@@ -104,6 +104,7 @@ export default function ChartStrategyPanel({ symbol, name, levels, levelVis = {}
                 </div>
               </div>
               <div className="text-gray-300">建議買法：{daily.buy_method}</div>
+              {daily.note && <div className="text-yellow-400">⚠ {daily.note}</div>}
             </div>
           )}
         </div>

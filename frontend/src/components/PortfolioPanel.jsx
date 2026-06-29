@@ -758,6 +758,7 @@ function DailyBlock({ d }) {
         </div>
       </div>
       <div className="text-gray-300">建議買法：{d.buy_method}</div>
+      {d.note && <div className="text-yellow-400">⚠ {d.note}</div>}
     </div>
   )
 }

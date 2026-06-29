@@ -102,6 +102,11 @@ def analyze_daily_signal(symbol: str) -> dict:
     else:
         candle = "小陽線" if bullish else "小陰線"
 
+    # 短期均線倒掛（MA5 跌破 MA10，俗稱短均死叉）— 短線動能轉弱訊號
+    ma_inverted = bool(ma5 and ma10 and ma5 < ma10)
+    # 剛剛倒掛（前一日 MA5≥MA10、今日 MA5<MA10）= 死叉當天，訊號更強
+    ma_cross_today = bool(ma_inverted and ma5_prev and ma10_prev and ma5_prev >= ma10_prev)
+
     # ── §13 打分 ───────────────────────────────────────────────────────────────
     trend = 0
     trend += 1 if (ma5 and c > ma5) else -2
@@ -109,6 +114,8 @@ def analyze_daily_signal(symbol: str) -> dict:
     if ma5 and ma5_prev and ma5 > ma5_prev: trend += 1
     if ma10 and ma10_prev and ma10 > ma10_prev: trend += 1
     if ma5 and ma10 and ma20 and ma5 > ma10 > ma20: trend += 2
+    if ma_inverted: trend -= 2          # MA5<MA10 短期均線倒掛
+    if ma_cross_today: trend -= 1       # 今日剛形成死叉，額外扣分
 
     kline = 0
     if candle == "放量大陽線": kline += 3
@@ -152,8 +159,17 @@ def analyze_daily_signal(symbol: str) -> dict:
     short_triggers = [f"跌破今日低點 {_r(l)} → 承接失效（下方買盤頂不住）、偏空"]
     if ma5: short_triggers.append(f"跌破 MA5 {_r(ma5)} → 超短線轉弱（短線走弱、不宜追）")
     if ma10: short_triggers.append(f"跌破 MA10 {_r(ma10)} → 短線趨勢轉弱（該減倉或退出）")
+    if ma_inverted and ma10:
+        short_triggers.append(f"反彈不過 MA10 {_r(ma10)} → 短均倒掛壓制（MA5<MA10、追多需謹慎）")
     if prev_high and not broke_prev_high:
         short_triggers.append(f"反彈不過前高 {_r(prev_high)} → 上方壓力持續（衝不過、賣壓重）")
+
+    # 短期均線倒掛結構提示
+    note = None
+    if ma_cross_today:
+        note = f"MA5({_r(ma5)}) 今日剛跌破 MA10({_r(ma10)})，形成短均死叉（短線動能轉弱）；反彈不過 MA10 不宜追多，等站回 MA10 之上再轉強。"
+    elif ma_inverted:
+        note = f"MA5({_r(ma5)}) < MA10({_r(ma10)})，短期均線倒掛（短線偏弱）；除非放量重新站上 MA10，否則偏向回踩/觀望。"
 
     # ── 建議買法 ───────────────────────────────────────────────────────────────
     if candle in ("放量突破前高/平台",) or (broke_prev_high and big_volume):
@@ -183,4 +199,7 @@ def analyze_daily_signal(symbol: str) -> dict:
         "long_triggers": long_triggers,
         "short_triggers": short_triggers,
         "buy_method": buy_method,
+        "ma_inverted": ma_inverted,
+        "ma_cross_today": ma_cross_today,
+        "note": note,
     }
