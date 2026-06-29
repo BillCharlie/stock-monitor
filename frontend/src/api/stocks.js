@@ -153,7 +153,8 @@ export const api = {
   }),
 
   getPositionAnalysis: (symbol, entry, entryDate = '') => {
-    const params = new URLSearchParams({ symbol, entry: String(entry) })
+    const params = new URLSearchParams({ symbol })
+    if (entry != null && entry !== '') params.set('entry', String(entry))
     if (entryDate) params.set('entry_date', entryDate)
     return request(`/portfolio/position-analysis?${params.toString()}`)
   },
