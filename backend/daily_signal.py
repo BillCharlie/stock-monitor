@@ -157,17 +157,17 @@ def analyze_daily_signal(symbol: str) -> dict:
         long_triggers.append(f"放量站上前高 {_r(prev_high)} 並收穩 → 突破確認（過前高、可視為轉強）")
 
     short_triggers = [f"跌破今日低點 {_r(l)} → 承接失效（下方買盤頂不住）、偏空"]
-    if ma5: short_triggers.append(f"跌破 MA5 {_r(ma5)} → 超短線轉弱（短線走弱、不宜追）")
+    if ma5: short_triggers.append(f"跌破 MA5 {_r(ma5)} → 超短線轉弱（短線走弱、不宜追價買進）")
     if ma10: short_triggers.append(f"跌破 MA10 {_r(ma10)} → 短線趨勢轉弱（該減倉或退出）")
     if ma_inverted and ma10:
-        short_triggers.append(f"反彈不過 MA10 {_r(ma10)} → 短均倒掛壓制（MA5<MA10、追多需謹慎）")
+        short_triggers.append(f"反彈不過 MA10 {_r(ma10)} → 短均倒掛壓制（MA5<MA10、追價買進需謹慎）")
     if prev_high and not broke_prev_high:
         short_triggers.append(f"反彈不過前高 {_r(prev_high)} → 上方壓力持續（衝不過、賣壓重）")
 
     # 短期均線倒掛結構提示
     note = None
     if ma_cross_today:
-        note = f"MA5({_r(ma5)}) 今日剛跌破 MA10({_r(ma10)})，形成短均死叉（短線動能轉弱）；反彈不過 MA10 不宜追多，等站回 MA10 之上再轉強。"
+        note = f"MA5({_r(ma5)}) 今日剛跌破 MA10({_r(ma10)})，形成短均死叉（短線動能轉弱）；反彈不過 MA10 不宜追價買進，等站回 MA10 之上再轉強。"
     elif ma_inverted:
         note = f"MA5({_r(ma5)}) < MA10({_r(ma10)})，短期均線倒掛（短線偏弱）；除非放量重新站上 MA10，否則偏向回踩/觀望。"
 
