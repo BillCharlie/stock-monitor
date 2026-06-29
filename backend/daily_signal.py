@@ -1,9 +1,12 @@
 """
-隔日（短線）買賣時機訊號 — 對應「K 線影線、量價與隔日買賣決策框架」。
+明日(T+1) 短線買賣時機訊號 — 對應「K 線影線、量價與隔日買賣決策框架」。
+
+術語說明：文中「明日 / T+1」一律指「以今日收盤為基準的下一個交易日」，
+即第二個交易日（今日為第一日），不是第三日。
 
 與 position_strategy（倉位管理）互補：
   - position_strategy 回答「持有後該減/加/出」；
-  - daily_signal 回答「明日在什麼價位、什麼條件下進出最合適」。
+  - daily_signal 回答「明日(T+1)在什麼價位、什麼條件下進出最合適」。
 
 輸出：今日 K 線分類、四項打分（趨勢/K線/量能/位置）、偏多偏空總分、
 關鍵價位（今高/今低/MA5/MA10/前高/平台支撐）、以及隔日條件式觸發與建議買法。
@@ -140,27 +143,27 @@ def analyze_daily_signal(symbol: str) -> dict:
     elif total >= -1: bias = "偏弱（降低期待）"
     else:             bias = "風險較高（不宜追高/應減倉）"
 
-    # ── 隔日條件式觸發 ─────────────────────────────────────────────────────────
-    long_triggers = [f"站上今日高點 {_r(h)} 且不破回 → 偏多延續"]
-    if ma5: long_triggers.append(f"回踩 MA5 {_r(ma5)} 不破再轉強 → 可低吸")
+    # ── 明日(T+1) 條件式觸發（術語後括號為白話）─────────────────────────────────
+    long_triggers = [f"站上今日高點 {_r(h)} 且不破回 → 偏多延續（漲勢可能續走）"]
+    if ma5: long_triggers.append(f"回踩 MA5 {_r(ma5)} 不破再轉強 → 可低吸（回落到均線不破時逢低買進）")
     if prev_high and not broke_prev_high:
-        long_triggers.append(f"放量站上前高 {_r(prev_high)} 並收穩 → 突破確認")
+        long_triggers.append(f"放量站上前高 {_r(prev_high)} 並收穩 → 突破確認（過前高、可視為轉強）")
 
-    short_triggers = [f"跌破今日低點 {_r(l)} → 承接失效、偏空"]
-    if ma5: short_triggers.append(f"跌破 MA5 {_r(ma5)} → 超短線轉弱")
-    if ma10: short_triggers.append(f"跌破 MA10 {_r(ma10)} → 短線趨勢轉弱")
+    short_triggers = [f"跌破今日低點 {_r(l)} → 承接失效（下方買盤頂不住）、偏空"]
+    if ma5: short_triggers.append(f"跌破 MA5 {_r(ma5)} → 超短線轉弱（短線走弱、不宜追）")
+    if ma10: short_triggers.append(f"跌破 MA10 {_r(ma10)} → 短線趨勢轉弱（該減倉或退出）")
     if prev_high and not broke_prev_high:
-        short_triggers.append(f"反彈不過前高 {_r(prev_high)} → 上方壓力持續")
+        short_triggers.append(f"反彈不過前高 {_r(prev_high)} → 上方壓力持續（衝不過、賣壓重）")
 
     # ── 建議買法 ───────────────────────────────────────────────────────────────
     if candle in ("放量突破前高/平台",) or (broke_prev_high and big_volume):
-        buy_method = f"突破買：放量站上 {_r(prev_high or h)} 收穩、隔日不跌回突破位"
+        buy_method = f"突破買（突破壓力位時買進）：放量站上 {_r(prev_high or h)} 收穩、明日(T+1)不跌回突破位"
     elif (ma5 and c > ma5) and (ma10 and c > ma10) and total >= 1:
-        buy_method = f"回踩買：回踩 MA5 {_r(ma5)} / MA10 {_r(ma10)} 不破、出現承接再進"
+        buy_method = f"回踩買（拉回到均線不破再買，即低吸）：回踩 MA5 {_r(ma5)} / MA10 {_r(ma10)} 不破、出現承接再進"
     elif candle in ("紅K長上影", "綠K長上影", "高位衝高回落", "上下影均衡收跌", "上下影均衡收漲", "長下影小實體", "低位長下影"):
-        buy_method = f"確認買：隔日收紅站回今日高點 {_r(h)}、量能溫和放大再進"
+        buy_method = f"確認買（等明天走強確認再買）：明日(T+1)收紅站回今日高點 {_r(h)}、量能溫和放大再進"
     else:
-        buy_method = "訊號分歧，等隔日確認再決定"
+        buy_method = "訊號分歧（多空不明），等明日(T+1)確認再決定"
 
     return {
         "candle_type": candle,

@@ -44,8 +44,8 @@ export default function ChartStrategyPanel({ symbol, name, onMark }) {
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-[#141414]"
       >
-        <span className="text-[11px] text-blue-300">{open ? '▾' : '▸'} 次日買賣時機</span>
-        <span className="text-[10px] text-gray-600">{name} {symbol}</span>
+        <span className="text-[11px] text-blue-300">{open ? '▾' : '▸'} 明日(T+1)買賣時機</span>
+        <span className="text-[10px] text-gray-600">{name} {symbol} · T+1＝下一交易日</span>
       </button>
 
       {open && (
@@ -57,7 +57,7 @@ export default function ChartStrategyPanel({ symbol, name, onMark }) {
             </div>
           )}
           {a && !a.error && a !== 'loading' && !daily && (
-            <div className="text-gray-500">本標的暫無次日時機資料</div>
+            <div className="text-gray-500">本標的暫無明日時機資料</div>
           )}
           {daily && (
             <div className="space-y-1">
@@ -69,8 +69,8 @@ export default function ChartStrategyPanel({ symbol, name, onMark }) {
                 <button onClick={() => onMark?.([], buildLevels(a))} className="ml-auto px-2 py-0.5 rounded bg-blue-800 text-blue-200 hover:bg-blue-700">標出時機價位</button>
               </div>
               <div className="flex flex-col gap-0.5">
-                <span style={{ color: GAIN }}>偏多觸發：{(daily.long_triggers || []).join('；')}</span>
-                <span style={{ color: LOSS }}>偏空觸發：{(daily.short_triggers || []).join('；')}</span>
+                <span style={{ color: GAIN }}>明日偏多觸發：{(daily.long_triggers || []).join('；')}</span>
+                <span style={{ color: LOSS }}>明日偏空觸發：{(daily.short_triggers || []).join('；')}</span>
               </div>
               <div className="text-gray-300">建議買法：{daily.buy_method}</div>
             </div>

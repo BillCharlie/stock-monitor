@@ -308,7 +308,7 @@ export default function PortfolioPanel({ onJumpToChart }) {
     ].filter(Boolean)
   }
 
-  // 隔日時機關鍵價位（今高/今低/MA5/MA10/前高/平台支撐），預設關閉，需要時勾選。
+  // 明日(T+1)時機關鍵價位（今高/今低/MA5/MA10/前高/平台支撐），預設關閉，需要時勾選。
   const dailyLevels = (a) => {
     const D = (a && a.daily && a.daily.levels) || {}
     return [
@@ -730,22 +730,22 @@ function AnalysisBlock({ a, onMark, onReload }) {
   )
 }
 
-// 隔日（短線）買賣時機建議 — K 線型態 + 量價 + 隔日條件式觸發。
+// 明日(T+1) 短線買賣時機建議 — K 線型態 + 量價 + 明日條件式觸發。
 function DailyBlock({ d }) {
   const sc = d.score || {}
   const totalColor = sc.total >= 4 ? GAIN : sc.total <= -2 ? LOSS : FLAT
   return (
     <div className="mt-1 pt-1.5 border-t border-[#1f1f1f] space-y-1">
       <div className="flex items-center gap-3 flex-wrap">
-        <span className="text-gray-500">次日時機</span>
+        <span className="text-gray-500" title="T+1＝以今日收盤為基準的下一個交易日">明日時機(T+1)</span>
         <span className="px-1.5 py-0.5 rounded bg-[#1A2330] text-gray-200">{d.candle_type}</span>
         <span className="text-gray-400">位置 {d.position}</span>
         <span className="font-semibold" style={{ color: totalColor }}>打分 {sc.total}（{d.bias}）</span>
         <span className="text-gray-600">趨{sc.trend} K{sc.kline} 量{sc.volume} 位{sc.position}</span>
       </div>
       <div className="flex flex-col gap-0.5">
-        <span style={{ color: GAIN }}>偏多觸發：{(d.long_triggers || []).join('；')}</span>
-        <span style={{ color: LOSS }}>偏空觸發：{(d.short_triggers || []).join('；')}</span>
+        <span style={{ color: GAIN }}>明日偏多觸發：{(d.long_triggers || []).join('；')}</span>
+        <span style={{ color: LOSS }}>明日偏空觸發：{(d.short_triggers || []).join('；')}</span>
       </div>
       <div className="text-gray-300">建議買法：{d.buy_method}</div>
     </div>
